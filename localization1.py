@@ -69,12 +69,9 @@ class ParticleFilter(object):
         xrand=np.random.normal(self.start_x,self.distance_noise,self.num_p)
         yrand=np.random.normal(self.start_y,self.distance_noise,self.num_p)
         trand=np.random.normal(0.0,self.angle_noise,self.num_p)
-        self.particles.append(Particale(xrand, yrand, trand))
-
-    def gaus(x, mu=0, sigma=1):
-        """calculates the probability of x for 1-dim Gaussian with mean mu and var. sigma"""
-        return np.exp(- ((x - mu) ** 2) / (sigma ** 2) / 2.0) / np.sqrt(2.0 * np.pi * (sigma ** 2))
-
+        for i in range(self.num_p):
+            self.particles.append(Particale(xrand[i], yrand[i], trand[i]))
+        self.weights=[1]*self.num_p
 
     def handle_odometry(self, odom):
         # relative motion from last odometry
@@ -106,9 +103,9 @@ class ParticleFilter(object):
     def predict_particle_odometry(self, p):
         # predict particle position
         # random
-        nx = random.gauss(0, 0.1)
-        ny = random.gauss(0, 0.1)
-        ntheta = random.gauss(0, 0.1)
+        nx = random.gauss(0, 0.25)
+        ny = random.gauss(0, 0.25)
+        ntheta = random.gauss(0, 0.3)
         # velocity
         v = sqrt(self.dx ** 2 + self.dy ** 2)
         # particle move is not dominated by noise
@@ -126,8 +123,8 @@ class ParticleFilter(object):
     @staticmethod
     def get_prediction_error_squared(self, laser_scan_msg,particle):
 
-        max_range = 3500
-        min_inten = 800
+        max_range = 4
+        min_inten = 1200
         actual_ranges = laser_scan_msg.ranges
         n = len(laser_scan_msg.ranges)
         for i in range(n):
@@ -145,7 +142,7 @@ class ParticleFilter(object):
             x, y = self.intersect(particle, b)
             distance = sqrt(x * x + y * y)
             angle = atan2(y, x)
-            ind_angle = math.ceil((angle - laser_scan_msg.angle_min)/d)
+            ind_angle = int((angle - laser_scan_msg.angle_min)/d)
             if ind_angle>0 and ind_angle<n:
                 for i in range(-5,5,1):
                     if ind_angle+i>0 and ind_angle+i<n:
@@ -162,23 +159,19 @@ class ParticleFilter(object):
             z = exp(x)
             return z / (1 + z)
 
-    def resample(self, new_particles):
+    def resample(self):
         # sample particle with probability that is proportional to its weight
-        sample = np.random.uniform(0, 1)
-        index = int(sample * (self.num_p - 1))
-        beta = 0.0
-        if not self.weights:
-            self.weights = [1] * self.num_p
-        max_w = max(self.weights)
-        for p in self.particles:
-            beta += np.random.uniform(0, 1) * 2.0 * max_w
-
-            while beta > self.weights[index]:
-                beta -= self.weights[index]
-                index = (index + 1) % self.num_p
-
-            p = self.particles[index]
-            new_particles.append(Particale(p.x, p.y, p.theta))
+        n = self.num_p
+        self.weigths = np.array(self.weights)
+        indices = []
+        C = np.append([0.], np.cumsum(self.weigths))
+        j = 0
+        u0 = (np.random.rand() + np.arange(n)) / n
+        for u in u0:
+            while j < len(C) and u > C[j]:
+                j += 1
+            indices += [j - 1]
+        return indices
 
     def handle_observation(self, laser_scan, dt):
         # prediction,weight updat and resampling
@@ -186,27 +179,38 @@ class ParticleFilter(object):
         errors = []
         x=[]
         y=[]
+        angles=[]
         for p in self.particles:
             self.predict_particle_odometry(p)
             error = self.get_prediction_error_squared(laser_scan, p)
             errors.append(error)
             x.append(p.x)
             y.append(p.y)
+            angles.append(p.theta)
 
-        self.best_estimate=[np.mean(x),np.mean(y)]
+        t=angles[0]
+        tmp=(angles[:]-t+pi)%(2.0*pi)+t-pi
+        theta=np.mean(tmp)%(2.0*pi)
+        self.best_estimate=[np.mean(x),np.mean(y),theta]
 
         # update weights
-        self.weights = [exp(-error) for error in errors]
-
+        for i in range(self.num_p):
+            if errors[i]>np.mean(errors):
+                self.weights[i]-=0.2*self.weights[i]
+            else:
+                self.weights[i]+=0.2*self.weights[i]
+        self.weights/=sum(self.weights)
+        inds=self.resample()
+        self.particles = self.particles[inds]
         # compute effective sample size by weights
-        sig_weight = [self.sigmoid(error) for error in errors]
-        N_eff = sum([1 / (weight ** 2) for weight in sig_weight])
+        #sig_weight = [self.sigmoid(error) for error in errors]
+        #N_eff = sum([1 / (weight ** 2) for weight in sig_weight])
 
         # resample only when size_eff>thresh
-        if N_eff > 90:
-            new_particles = []
-            self.resample(new_particles)
-            self.particles = new_particles
+        #if N_eff > 90:
+        #    new_particles = []
+        #    self.resample(new_particles)
+        #    self.particles = new_particles
 
 
 class MonteCarlo(object):
@@ -273,7 +277,7 @@ def fibonacci_client(command, param):
 # print("stm driver loaded")
 rospy.wait_for_service('comm_to_stm')
 print("seervice initialized")
-num_particles = 100
+num_particles = 1000
 xmin = 0
 xmax = 3.2
 ymin = 0
