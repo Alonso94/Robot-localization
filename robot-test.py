@@ -131,7 +131,7 @@ class ParticleFilter(object):
     def get_prediction_error_squared(self,laser_scan_msg,particle):
 
         max_range = 4
-        min_inten = 3000
+        min_inten = 1200
         actual_ranges = list(laser_scan_msg.ranges)
         intens=list(laser_scan_msg.intensities)
         n = len(laser_scan_msg.ranges)
@@ -301,22 +301,10 @@ class MonteCarlo(object):
         self.particles_pub.publish(ma)
 
     def run(self):
-        dx = dy = dtheta = 0
         rate = rospy.Rate(20)
         while not rospy.is_shutdown():
             self.publish_particle_markers()
             rate.sleep()
-            command = int("0x11", 16)
-            print("enter parameters")
-            dx = input("x ")
-            dy = input("y ")
-            dtheta = input("theta ")
-            param = [dx, dy, dtheta, 1]
-            # send_command_to_stm=rospy.ServiceProxy('comm_to_stm',ros_stm_driver.srv.stm_command)
-            print(command, param)
-            # res=send_command_to_stm(command,param)
-            fibonacci_client(command, param)
-            print(self.pf.best_estimate[0], mcl.pf.best_estimate[1])
 
 
 def fibonacci_client(command, param):
@@ -346,4 +334,18 @@ ymin = 0
 ymax = 2
 mcl = MonteCarlo(num_particles, xmin, xmax, ymin, ymax)
 print("MCL began")
-mcl.run()
+# send_command_to_stm=rospy.ServiceProxy('comm_to_stm',ros_stm_driver.srv.stm_command)
+dx = dy = dtheta = 0
+while (1):
+    command = int("0x11", 16)
+    print("enter parameters")
+    dx = input("x ")
+    dy = input("y ")
+    dtheta = input("theta ")
+    param = [dx, dy, dtheta, 1]
+    # send_command_to_stm=rospy.ServiceProxy('comm_to_stm',ros_stm_driver.srv.stm_command)
+    print(command, param)
+    # res=send_command_to_stm(command,param)
+    fibonacci_client(command, param)
+    mcl.run()
+    print(mcl.pf.best_estimate[0], mcl.pf.best_estimate[1])
