@@ -97,8 +97,8 @@ class ParticleFilter(object):
             q_last_curr = tr.quaternion_multiply(tr.quaternion_inverse(q_last), q_curr)
             _, _, dtheta = tr.euler_from_quaternion(q_last_curr)
             self.dtheta += dtheta
-            self.dx += p_last_curr[0]
-            self.dy += p_last_curr[1]
+            self.dx += (p_last_curr[0])*2000
+            self.dy += (p_last_curr[1])*2000
 
     def predict_particle_odometry(self, p):
         # predict particle position
@@ -120,15 +120,15 @@ class ParticleFilter(object):
         y = -beacon.x * np.sin(particle.theta) + beacon.y * np.cos(particle.theta) + particle.x * np.sin(particle.theta) - particle.y * np.cos(particle.theta)
         return x, y
 
-    @staticmethod
     def get_prediction_error_squared(self, laser_scan_msg,particle):
 
         max_range = 4
-        min_inten = 1200
-        actual_ranges = laser_scan_msg.ranges
+        min_inten = 2000
+        intens=list(laser_scan_msg.intensities)
+        actual_ranges = list(laser_scan_msg.ranges)
         n = len(laser_scan_msg.ranges)
         for i in range(n):
-            if actual_ranges[i]>max_range or laser_scan_msg.intinsities[i]<min_inten:
+            if actual_ranges[i]>max_range or intens[i]<min_inten:
                 actual_ranges[i]=max_range
         d = (laser_scan_msg.angle_max - laser_scan_msg.angle_min) / n
 
@@ -199,9 +199,10 @@ class ParticleFilter(object):
                 self.weights[i]-=0.2*self.weights[i]
             else:
                 self.weights[i]+=0.2*self.weights[i]
-        self.weights/=sum(self.weights)
+        sumw=sum(self.weights)
+        self.weights=[ x/sum(self.weights) for x in self.weights]
         inds=self.resample()
-        self.particles = self.particles[inds]
+        self.particles = [self.particles[i] for i in inds]
         # compute effective sample size by weights
         #sig_weight = [self.sigmoid(error) for error in errors]
         #N_eff = sum([1 / (weight ** 2) for weight in sig_weight])
