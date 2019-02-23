@@ -59,8 +59,8 @@ class ParticleFilter(object):
         self.dtheta = 0
 
         #start
-        self.start_x=293
-        self.start_y=425
+        self.start_x=200
+        self.start_y=1180
         self.distance_noise=5
         self.angle_noise=0.05
 
@@ -130,7 +130,7 @@ class ParticleFilter(object):
 
     def get_prediction_error_squared(self,laser_scan_msg,particle):
 
-        max_range = 4
+        max_range = 3.8
         min_inten = 1200
         actual_ranges = list(laser_scan_msg.ranges)
         intens=list(laser_scan_msg.intensities)
@@ -153,12 +153,13 @@ class ParticleFilter(object):
             distance = sqrt(gx * gx + gy * gy)
             angle = atan2(gy, gx)
             ind_angle = int((angle - laser_scan_msg.angle_min)//d)
+            diff=[]
             if ind_angle>0 and ind_angle<n:
                 for i in range(-5,5,1):
                     if ind_angle+i>0 and ind_angle+i<n:
-                        predict_ranges[ind_angle+i]=distance
+                        diff.append(abs(actual_ranges[ind_angle+i]-distance))
         #print(predict_ranges)
-        diff = [actual_range - predict_range for actual_range, predict_range in zip(actual_ranges, predict_ranges)]
+        #diff = [actual_range - predict_range for actual_range, predict_range in zip(actual_ranges, predict_ranges)]
         #print(diff)
         #x=input()
         norm_error = np.linalg.norm(diff)
@@ -320,6 +321,7 @@ def fibonacci_client(command, param):
     #     rospy.logerr("wrong result parameters")
     #     return 0
     rospy.loginfo("result = %s", realResult)
+
     return realResult
 
 
@@ -336,6 +338,9 @@ mcl = MonteCarlo(num_particles, xmin, xmax, ymin, ymax)
 print("MCL began")
 # send_command_to_stm=rospy.ServiceProxy('comm_to_stm',ros_stm_driver.srv.stm_command)
 dx = dy = dtheta = 0
+command=int("0x3",16)
+param=[0,0,0]
+fibonacci_client(command,param)
 while (1):
     command = int("0x11", 16)
     print("enter parameters")
@@ -347,5 +352,8 @@ while (1):
     print(command, param)
     # res=send_command_to_stm(command,param)
     fibonacci_client(command, param)
-    mcl.run()
+    command=int("0x32",16)
+    while (1):
+        if fibonacci_client(command,[])[0]==1:
+            break
     print(mcl.pf.best_estimate[0], mcl.pf.best_estimate[1])
