@@ -6,9 +6,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sensor_msgs.msg import LaserScan
 import scipy.optimize
-
 import actionlib
 import time
+
+from std_msgs.msg import String, Header, ColorRGBA
+from geometry_msgs.msg import Twist, PoseStamped, Point
+from visualization_msgs.msg import Marker, MarkerArray
 
 import ros_stm_driver.srv
 import struct
@@ -69,8 +72,8 @@ class ParticleFilter(object):
         xrand=np.random.normal(self.start_x,self.distance_noise,self.num_p)
         yrand=np.random.normal(self.start_y,self.distance_noise,self.num_p)
         trand=np.random.normal(0.0,self.angle_noise,self.num_p)
-	for i in range(self.num_p):
-        	self.particles.append(Particale(xrand[i], yrand[i], trand[i]))
+        for i in range(self.num_p):
+            self.particles.append(Particale(xrand[i], yrand[i], trand[i]))
 
     def gaus(x, mu=0, sigma=1):
         """calculates the probability of x for 1-dim Gaussian with mean mu and var. sigma"""
@@ -120,27 +123,26 @@ class ParticleFilter(object):
         p.theta += self.dtheta + ntheta
 
     def intersect(self,particle, beacon):
-        #print(particle.x,beacon.x)
-	x = beacon.x * np.cos(particle.theta) + beacon.y * np.sin(particle.theta) - particle.x * np.cos(particle.theta) - particle.y * np.sin(particle.theta)
+        x = beacon.x * np.cos(particle.theta) + beacon.y * np.sin(particle.theta) - particle.x * np.cos(particle.theta) - particle.y * np.sin(particle.theta)
         y = -beacon.x * np.sin(particle.theta) + beacon.y * np.cos(particle.theta) + particle.x * np.sin(particle.theta) - particle.y * np.cos(particle.theta)
         #print(x,y)
-	return x, y
+        return x, y
 
     def get_prediction_error_squared(self,laser_scan_msg,particle):
-        #print(particle.x)
-	max_range = 4
+
+        max_range = 4
         min_inten = 3000
         actual_ranges = list(laser_scan_msg.ranges)
-	intens=list(laser_scan_msg.intensities)
-	n = len(laser_scan_msg.ranges)
+        intens=list(laser_scan_msg.intensities)
+        n = len(laser_scan_msg.ranges)
         for i in range(n):
             if actual_ranges[i]>max_range or intens[i]<min_inten:
                 actual_ranges[i]=max_range
-        #print(actual_ranges)
-	d = (laser_scan_msg.angle_max - laser_scan_msg.angle_min) / n
+
+        d = (laser_scan_msg.angle_max - laser_scan_msg.angle_min) / n
 
         predict_ranges = [max_range]*n
-	#print(predict_ranges)
+        #print(predict_ranges)
         beacons=[]
         beacons.append(Beacon(0,0))
         beacons.append(Beacon(0,2000))
@@ -156,10 +158,10 @@ class ParticleFilter(object):
                     if ind_angle+i>0 and ind_angle+i<n:
                         predict_ranges[ind_angle+i]=distance
         #print(predict_ranges)
-	diff = [actual_range - predict_range for actual_range, predict_range in zip(actual_ranges, predict_ranges)]
-	#print(diff)
-	#x=input()
-	norm_error = np.linalg.norm(diff)
+        diff = [actual_range - predict_range for actual_range, predict_range in zip(actual_ranges, predict_ranges)]
+        #print(diff)
+        #x=input()
+        norm_error = np.linalg.norm(diff)
         return norm_error ** 2
 
     def sigmoid(self, x):
@@ -235,6 +237,9 @@ class MonteCarlo(object):
 
         self.mutex = Lock()
 
+        self.laser_points_marker_pub = rospy.Publisher('/husky_1/debug/laser_points', Marker, queue_size=1)
+        self.particles_pub = rospy.Publisher('/husky_1/particle_filter/particles', MarkerArray, queue_size=1)
+
     def odom_callback(self, msg):
         self.mutex.acquire()
         self.pf.handle_odometry(msg)
@@ -259,6 +264,59 @@ class MonteCarlo(object):
 
         self.mutex.release()
         self.last_scan = msg
+
+    def get_particle_marker(self, timestamp, particle, marker_id):
+        """Returns an rviz marker that visualizes a single particle"""
+        msg = Marker()
+        msg.header.stamp = timestamp
+        msg.header.frame_id = 'map'
+        msg.ns = 'particles'
+        msg.id = marker_id
+        msg.type = 0  # arrow
+        msg.action = 0  # add/modify
+        msg.lifetime = rospy.Duration(1)
+
+        yaw_in_map = particle.theta
+        vx = cos(yaw_in_map)
+        vy = sin(yaw_in_map)
+
+        msg.color = ColorRGBA(0, 1.0, 0, 1.0)
+
+        msg.points.append(Point(particle.x, particle.y, 0.2))
+        msg.points.append(Point(particle.x + 0.3 * vx, particle.y + 0.3 * vy, 0.2))
+
+        msg.scale.x = 0.05
+        msg.scale.y = 0.15
+        msg.scale.z = 0.1
+
+        return msg
+
+    def publish_particle_markers(self):
+        """ Publishes the particles of the particle filter in rviz"""
+        ma = MarkerArray()
+        ts = rospy.Time.now()
+        for i in range(len(self.pf.particles)):
+            ma.markers.append(self.get_particle_marker(ts, self.pf.particles[i], i))
+
+        self.particles_pub.publish(ma)
+
+    def run(self):
+        dx = dy = dtheta = 0
+        rate = rospy.Rate(20)
+        while not rospy.is_shutdown():
+            self.publish_particle_markers()
+            rate.sleep()
+            command = int("0x11", 16)
+            print("enter parameters")
+            dx = input("x ")
+            dy = input("y ")
+            dtheta = input("theta ")
+            param = [dx, dy, dtheta, 1]
+            # send_command_to_stm=rospy.ServiceProxy('comm_to_stm',ros_stm_driver.srv.stm_command)
+            print(command, param)
+            # res=send_command_to_stm(command,param)
+            fibonacci_client(command, param)
+            print(self.pf.best_estimate[0], mcl.pf.best_estimate[1])
 
 
 def fibonacci_client(command, param):
@@ -288,17 +346,4 @@ ymin = 0
 ymax = 2
 mcl = MonteCarlo(num_particles, xmin, xmax, ymin, ymax)
 print("MCL began")
-# send_command_to_stm=rospy.ServiceProxy('comm_to_stm',ros_stm_driver.srv.stm_command)
-dx = dy = dtheta = 0
-while (1):
-    command = int("0x11", 16)
-    print("enter parameters")
-    dx = input("x ")
-    dy = input("y ")
-    dtheta = input("theta ")
-    param = [dx, dy, dtheta, 1]
-    # send_command_to_stm=rospy.ServiceProxy('comm_to_stm',ros_stm_driver.srv.stm_command)
-    print(command, param)
-    # res=send_command_to_stm(command,param)
-    fibonacci_client(command, param)
-    print(mcl.pf.best_estimate[0], mcl.pf.best_estimate[1])
+mcl.run()
