@@ -2,6 +2,7 @@
 import matplotlib.pyplot as plt
 import scipy.optimize
 
+import roslib
 import rospy
 
 from localization.srv import GetCoords
@@ -76,6 +77,7 @@ def laser_callback(self, msg):
     mutex.release()
 
 def get_coords_callback():
+    return GetCoordsResponse(True, x,y,z)
 
 x=200
 y=1180
