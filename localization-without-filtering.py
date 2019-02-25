@@ -52,13 +52,15 @@ def handle_observation(laser_scan_msg):
     points[:, 0] = x
     points[:, 1] = y
 
-    beacons_len = np.sum((Beacons[np.newaxis, :, :] - apr_points[:, np.newaxis, :]) ** 2, axis=2) ** 0.5
-
     # points in robot frame (false frame)
     apr_points = cvt_local2global(points, init_X)[:, 0:2]
 
+    beacons_len = np.sum((Beacons[np.newaxis, :, :] - apr_points[:, np.newaxis, :]) ** 2, axis=2) ** 0.5
+
     # label points
     num_beacons = np.argmin(beacons_len, axis=1)
+
+    init_pos=[]
 
     def fun(X, points, num_beacons):
         beacon = Beacons[num_beacons]
@@ -77,7 +79,7 @@ def laser_callback(self, msg):
     mutex.release()
 
 def get_coords_callback():
-    return GetCoordsResponse(True, x,y,z)
+    return GetCoordsResponse(True, x,y,theta)
 
 x=200
 y=1180
