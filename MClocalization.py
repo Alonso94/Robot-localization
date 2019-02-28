@@ -13,23 +13,29 @@ import numpy as np
 import tf.transformations as tr
 
 def cvt_local2global(local_point, sc_point):
-    point = np.zeros((3, len(local_point)))
     x, y, a = local_point.T
-    X, Y, A = sc_point
-    point[0] = x * np.cos(A) - y * np.sin(A) + X
-    point[1] = x * np.sin(A) + y * np.cos(A) + Y
-    point[2] = a + A
-    return point.T
+    X, Y, A = sc_point.T
+    x1 = x * np.cos(A) - y * np.sin(A) + X
+    y1 = x * np.sin(A) + y * np.cos(A) + Y
+    a1 = (a + A) % (2 * np.pi)
+    return np.array([x1, y1, a1]).T
 
 
 def cvt_global2local(global_point, sc_point):
-    point = np.zeros((3, len(global_point)))
     x, y, a = global_point.T
-    X, Y, A = sc_point
-    point[0] = x * np.cos(A) + y * np.sin(A) - X * np.cos(A) - Y * np.sin(A)
-    point[1] = -x * np.sin(A) + y * np.cos(A) + X * np.sin(A) - Y * np.cos(A)
-    point[2] = a - A
-    return point.T
+    X, Y, A = sc_point.T
+    x1 = x * np.cos(A) + y * np.sin(A) - X * np.cos(A) - Y * np.sin(A)
+    y1 = -x * np.sin(A) + y * np.cos(A) + X * np.sin(A) - Y * np.cos(A)
+    a1 = (a - A) % (2 * np.pi)
+    return np.array([x1, y1, a1]).T
+
+def find_src(global_point, local_point):
+    x, y, a = local_point.T
+    x1, y1, a1 = global_point.T
+    A = (a1 - a) % (2 * np.pi)
+    X = x1 - x * np.cos(A) + y * np.sin(A)
+    Y = y1 - x * np.sin(A) - y * np.cos(A)
+    return np.array([X, Y, A]).T
 
 
 class ParticleFilter(object):
@@ -41,7 +47,7 @@ class ParticleFilter(object):
         #second robot x=250 y=1660
         self.start_theta=0.0
 
-        self.beacons=[[3094,1000],[-94,50],[-94,1950]]
+        self.beacons=np.array([[3094,1000],[-94,50],[-94,1950]])
         # or
         #self.beacons=[[3094,50],[3094,1950],[-94,1000]]
         self.beac_dist_thresh=300
@@ -55,7 +61,7 @@ class ParticleFilter(object):
         xrand = np.random.normal(self.start_x, self.distance_noise, self.num_particles)
         yrand = np.random.normal(self.start_y, self.distance_noise, self.num_particles)
         trand = np.random.normal(0.0, self.angle_noise, self.num_particles)
-        self.particles=np.array([xrand,yrand,trand])
+        self.particles=np.array([xrand,yrand,trand]).T
         self.weights=[1]*self.num_particles
 
     @staticmethod
@@ -64,11 +70,11 @@ class ParticleFilter(object):
 
     def move_particles(self,dx,dy,dtheta):
 
-        x_noise = np.random.normal(0, self.distance_noise, self.num_particles)
+        x_noise = np.random.normal(0, self.distance_noise/4, self.num_particles)
         move_x=dx+x_noise
-        y_noise = np.random.normal(0, self.distance_noise, self.num_particles)
+        y_noise = np.random.normal(0, self.distance_noise/4, self.num_particles)
         move_y=dy+y_noise
-        angle_noise = np.random.normal(0, self.angle_noise, self.num_particles)
+        angle_noise = np.random.normal(0, self.angle_noise/2, self.num_particles)
         move_theta=dtheta+angle_noise
         move_point=np.array([move_x,move_y,move_theta]).T
         self.particles = cvt_local2global(move_point, self.particles)
@@ -204,7 +210,7 @@ class Montecarlo(object):
         # prediction,weight updat and resampling
         # predict errors
         max_range = 3800
-        min_inten = 1200
+        min_inten = 2000
         ranges = list(laser_scan_msg.ranges)
         ranges=[x*1000 for x in ranges]
         intens = list(laser_scan_msg.intensities)
@@ -224,7 +230,7 @@ class Montecarlo(object):
         self.pf.resample_and_update()
         res=self.pf.calc_pose()
 
-        self.position_pub.publish(res)
+        self.position_pub.publish(Coordinates(res[0],res[1],res[2]))
 
     def laser_callback(self,msg):
 
