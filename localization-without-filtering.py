@@ -37,14 +37,18 @@ def handle_observation(laser_scan_msg):
     max_range = 3800
     min_inten = 1200
     ranges = list(laser_scan_msg.ranges)
-    ranges*=1000
+    ranges=[x*1000 for x in ranges]
     intens = list(laser_scan_msg.intensities)
     angles = np.arange(laser_scan_msg.angle_min, laser_scan_msg.angle_max, laser_scan_msg.angle_increment)
 
-    cond = (ranges < max_range) * (intens > min_inten)
-    x = (ranges * np.cos(angles))[cond]
-    y = (ranges * np.sin(angles))[cond]
-    inten = intens[cond]
+    x=[]
+    y=[]
+    inten=[]
+    for i in range(len(ranges)):
+        if (ranges[i] < max_range) and (intens > min_inten):
+            x.append(ranges[i]*np.cos(angles[i]))
+            y.append(ranges[i]*np.sin(angles[i]))
+            inten.append(intens[i])
 
     Beacons = np.array([[-100, 50], [-100, 1950], [3100, 1000]])#, [1500, 220], [1500, 2000]])
 
@@ -63,15 +67,13 @@ def handle_observation(laser_scan_msg):
     # label points
     num_beacons = np.argmin(beacons_len, axis=1)
 
-    init_pos=[x,y,z]
-
     def fun(X, points, num_beacons):
         beacon = Beacons[num_beacons]
         points = cvt_local2global(points, X)[:, 0:2]
         total_r = np.sum((beacon - points) ** 2, axis=1) ** 0.5 - r
         return total_r
 
-    robot_position = scipy.optimize.least_squares(fun, robot_position, loss="cauchy", args=[points, num_beacons], ftol=1e-6)
+    robot_position = scipy.optimize.least_squares(fun, robot_position, loss="cauchy", args=[points, num_beacons], ftol=1e-6)["x"]
     res=Coordinates(robot_position[0],robot_position[1],robot_position[2])
     position_pub.publish(res)
 
@@ -127,6 +129,7 @@ curr_odom=None
 last_odom=None
 dx=0
 dy=0
+dtheta=0
 rospy.init_node('localization', anonymous=True)
 position_pub = rospy.Publisher('/robot_position',Coordinates, queue_size = 1)
 laser_sub = rospy.Subscriber('/scan', LaserScan, laser_callback, queue_size=1)
