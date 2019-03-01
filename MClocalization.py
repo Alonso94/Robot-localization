@@ -70,12 +70,12 @@ class ParticleFilter(object):
 
     def move_particles(self,dx,dy,dtheta):
 
-        x_noise = np.random.normal(0, self.distance_noise/4, self.num_particles)
-        move_x=dx+x_noise
-        y_noise = np.random.normal(0, self.distance_noise/4, self.num_particles)
-        move_y=dy+y_noise
-        angle_noise = np.random.normal(0, self.angle_noise/2, self.num_particles)
-        move_theta=dtheta+angle_noise
+        #x_noise = np.random.normal(0, self.distance_noise/4, self.num_particles)
+        move_x=dx+#x_noise
+        #y_noise = np.random.normal(0, self.distance_noise/4, self.num_particles)
+        move_y=dy+#y_noise
+        #angle_noise = np.random.normal(0, self.angle_noise/2, self.num_particles)
+        move_theta=dtheta#+angle_noise
         move_point=np.array([move_x,move_y,move_theta]).T
         self.particles = cvt_local2global(move_point, self.particles)
         self.particles[self.particles[:, 1] > 2000 - 100, 1] = 2000 - 100
