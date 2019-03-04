@@ -90,7 +90,7 @@ class ParticleFilter(object):
         self.particles[self.particles[:, 0] < 100, 0] = 100
         self.particles[self.particles[:, 2] > (2*np.pi) ] %=(2*np.pi)
 
-    def calc_weights(self,ranges,angle_min,angle_increment):
+    def calc_weights(self,ranges,angle_min):
 
         diffs=[]
         p_sum=np.zeros(self.num_particles)
@@ -180,31 +180,15 @@ class Montecarlo(object):
         intens = list(laser_scan_msg.intensities)
         angles = np.arange(laser_scan_msg.angle_min, laser_scan_msg.angle_max, laser_scan_msg.angle_increment)
         angle_min=laser_scan_msg.angle_min
-        angle_increment=laser_scan_msg.angle_increment
-        l=0
-        sum=0
-        start=0
-        ranges_after=np.zeros(len(ranges))
-        p_sum = np.zeros(len(ranges))
+
+        laser_ranges=[]
         for i in range(len(ranges)):
-            if (ranges[i] < max_range) and (intens[i] > min_inten):
-                if l == 0:
-                    l = 1
-                    start = i
-                sum += 1
-            else:
-                if sum > 0 and l == 1:
-                    l = 0
-                    ind_mean = start + (sum / 2)
-                    mean = angles[ind_mean]
-                    sigma = 0.3
-                    ranges_after[ind_mean] = ranges[ind_mean]
-                    p = norm.pdf(angles, mean, sigma)
-                    p_sum += (ranges[ind_mean]) * (p/np.max(p))
-                    sum = 0
+            if (ranges[i] < max_range) and (intens > min_inten):
+                laser_ranges.append(range[i])
+
 
         self.pf.move_particles(self.dx,self.dy,self.dtheta)
-        self.pf.calc_weights(p_sum,angle_min,angle_increment)
+        self.pf.calc_weights(laser_ranges,angle_min)
         res = self.pf.weighted_mean()
         self.pf.resample_and_update()
         #res=self.pf.calc_pose()
