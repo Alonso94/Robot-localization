@@ -7,7 +7,8 @@ import rospy
 
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
-from localization.msg import Coordinates
+from geometry_msgs.msg import Pose2D
+
 from threading import Lock
 import numpy as np
 import tf.transformations as tr
@@ -42,10 +43,10 @@ class ParticleFilter(object):
     def __init__(self):
 
         self.num_particles=100
-        self.start_x=300
+        self.start_x=150
         self.start_y=1250
         #second robot x=250 y=1660
-        self.start_theta=0.0
+        self.start_theta=3.14
 
         self.beacons=np.array([[3094,1000],[-94,50],[-94,1950]])
         # or
@@ -200,7 +201,7 @@ class Montecarlo(object):
         self.pf=ParticleFilter()
 
         rospy.init_node('localization', anonymous=True)
-        self.position_pub = rospy.Publisher('/robot_position', Coordinates, queue_size=1)
+        self.position_pub = rospy.Publisher('/robot_position', Pose2D, queue_size=1)
         self.laser_sub = rospy.Subscriber('/scan', LaserScan, self.laser_callback, queue_size=1)
         self.odom_sub = rospy.Subscriber('/real', Odometry, self.odom_callback, queue_size=1)
         self.mutex = Lock()
@@ -230,7 +231,7 @@ class Montecarlo(object):
         self.pf.resample_and_update()
         res=self.pf.calc_pose()
 
-        self.position_pub.publish(Coordinates(res[0],res[1],res[2]))
+        self.position_pub.publish(Pose2D(res[0] / 1000, res[1] / 1000, res[2]))
 
     def laser_callback(self,msg):
 

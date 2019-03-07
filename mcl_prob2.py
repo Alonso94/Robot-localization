@@ -47,10 +47,10 @@ class ParticleFilter(object):
     def __init__(self):
 
         self.num_particles=100
-        self.start_x=300
+        self.start_x=150
         self.start_y=1250
         #second robot x=250 y=1660
-        self.start_theta=1.57
+        self.start_theta=3.14
 
         self.beacons=np.array([[3094.0,1000.0],[-94.0,50.0],[-94.0,1950.0]])
         # or
