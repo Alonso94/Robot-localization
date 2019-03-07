@@ -13,7 +13,7 @@ import tf.transformations as tr
 from math import sqrt,atan2 ,exp
 from scipy.stats import norm
 from std_msgs.msg import String, Header, ColorRGBA
-from geometry_msgs.msg import Twist, PoseStamped, Point,Pose2D
+from geometry_msgs.msg import Pose, Point,Pose2D,PoseArray
 from visualization_msgs.msg import Marker, MarkerArray
 
 
@@ -50,9 +50,9 @@ class ParticleFilter(object):
         self.start_x=300
         self.start_y=1250
         #second robot x=250 y=1660
-        self.start_theta=0.0
+        self.start_theta=1.57
 
-        self.beacons=np.array([[3094,1000],[-94,50],[-94,1950]])
+        self.beacons=np.array([[3094.0,1000.0],[-94.0,50.0],[-94.0,1950.0]])
         # or
         #self.beacons=[[3094,50],[3094,1950],[-94,1000]]
         self.beac_dist_thresh=300
@@ -61,7 +61,7 @@ class ParticleFilter(object):
 
 
 
-        self.distance_noise=5
+        self.distance_noise=10
         self.angle_noise=0.04
         xrand = np.random.normal(self.start_x, self.distance_noise, self.num_particles)
         yrand = np.random.normal(self.start_y, self.distance_noise, self.num_particles)
@@ -81,8 +81,9 @@ class ParticleFilter(object):
         move_y=dy+y_noise
         angle_noise = np.random.normal(0, self.angle_noise/2, self.num_particles)
         move_theta=dtheta+angle_noise
-        move_point=np.array([move_x,move_y,move_theta]).T
-        self.particles = cvt_local2global(move_point, self.particles)
+        self.particles[:,0] += move_x
+        self.particles[:,1] += move_y
+        self.particles[:,2] += move_theta
         self.particles[self.particles[:, 1] > 2000 - 100, 1] = 2000 - 100
         self.particles[self.particles[:, 1] < 0, 1] = 0
         self.particles[self.particles[:, 0] > 3000 - 100, 0] = 3000 - 100
@@ -104,13 +105,14 @@ class ParticleFilter(object):
                     angle-=np.pi*2
                 angle=angle-angle_min
                 angle_ind = int(angle / angle_increment)
-                if angle_ind>0 and angle_ind<1081 and p_sum[angle_ind]>0:
+                if angle_ind>0 and angle_ind<1081 and p_sum[angle_ind]>0.0:
                     distance=sqrt(dx*dx+dy*dy)-50
                     diff+=((p_sum[angle_ind]-distance)**2)/p_sum[angle_ind]
             diffs.append(diff)
-        diffs/=np.sum(diffs)
-        self.weights = [(1/error) for error in diffs]
-        self.weights/=np.sum(self.weights)
+        #diffs/=np.sum(diffs)
+        self.best=np.argmin(diffs)
+        self.weights = [exp(-error) for error in diffs]
+        #self.weights/=np.sum(self.weights)
 
 
     def resample_and_update(self):
@@ -122,7 +124,7 @@ class ParticleFilter(object):
         j = 0
         u0 = (np.random.rand() + np.arange(n)) / n
         for u in u0:
-            while j < len(C) and u > C[j]:
+            while j < len(C)-1 and u > C[j]:
                 j += 1
             indices += [j - 1]
 
@@ -162,7 +164,9 @@ class Montecarlo(object):
         self.position_pub = rospy.Publisher('/robot_position', Pose2D, queue_size=1)
         self.laser_sub = rospy.Subscriber('/scan', LaserScan, self.laser_callback, queue_size=1)
         self.odom_sub = rospy.Subscriber('/real', Odometry, self.odom_callback, queue_size=1)
-        self.particles_pub = rospy.Publisher('/husky_1/particle_filter/particles', MarkerArray, queue_size=1)
+
+        self.particles_pub = rospy.Publisher('/particles', PoseArray,queue_size=1)
+
         self.mutex = Lock()
 
 
@@ -201,9 +205,13 @@ class Montecarlo(object):
 
         self.pf.move_particles(self.dx,self.dy,self.dtheta)
         self.pf.calc_weights(p_sum,angle_min,angle_increment)
+        x=self.pf.particles[self.pf.best][0]
+        y=self.pf.particles[self.pf.best][1]
+        theta=self.pf.particles[self.pf.best][2]
+        res=np.array((x,y,theta))
         self.pf.resample_and_update()
-        res=self.pf.calc_pose()
-
+        #res=self.pf.calc_pose()
+        self.publish_particle_rviz()
         self.position_pub.publish(Pose2D(res[0]/1000,res[1]/1000,res[2]))
 
     def laser_callback(self,msg):
@@ -247,6 +255,27 @@ class Montecarlo(object):
         self.mutex.acquire()
         self.handle_odometry(msg)
         self.mutex.release()
+
+
+    def publish_particle_rviz(self):
+        """ Publishes the particles of the particle filter in rviz"""
+        msg=PoseArray()
+        msg.header.stamp=rospy.Time.now()
+        msg.header.frame_id="map"
+        for p in self.pf.particles:
+            pose=Pose()
+            pose.position.x=p[0]
+            pose.position.y=p[1]
+            pose.position.z=0.0
+
+            pose.orientation.x=0.0
+            pose.orientation.y=0.0
+            pose.orientation.z=1.0
+            pose.orientation.w=0.0
+
+            msg.poses.append(pose)
+
+        self.particles_pub.publish(msg)
 
 
 MCL=Montecarlo()

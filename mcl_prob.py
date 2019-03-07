@@ -7,7 +7,6 @@ import rospy
 
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
-from localization.msg import Coordinates
 from threading import Lock
 import numpy as np
 import tf.transformations as tr
@@ -75,7 +74,8 @@ class ParticleFilter(object):
         return np.exp(- ((x - mu) ** 2) / (sigma ** 2) / 2.0) / np.sqrt(2.0 * np.pi * (sigma ** 2))
 
     def move_particles(self,dx,dy,dtheta):
-
+        if dx<0.0001 and dy<0.0001 and dtheta<= 0.01:
+            return
         x_noise = np.random.normal(0, self.distance_noise/4, self.num_particles)
         move_x=dx+x_noise
         y_noise = np.random.normal(0, self.distance_noise/4, self.num_particles)
@@ -93,7 +93,7 @@ class ParticleFilter(object):
     def calc_weights(self,ranges,angle_min):
 
         diffs=[]
-        p_sum=np.zeros(self.num_particles)
+        p_sum=np.zeros(len(ranges))
         for p in self.particles:
             diff=0
             for b in self.beacons:
@@ -107,11 +107,11 @@ class ParticleFilter(object):
                     angle-=np.pi*2
                 angle=angle-angle_min
                 sigma=0.3
-                p=np.random.normal(angle,sigma,self.num_particles)
+                p=np.random.normal(angle,sigma,len(ranges))
                 p_sum+=(p/np.max(p))*distance
-            for r in range(self.num_particles):
+            for r in range(len(ranges)):
                 if ranges[r]>50:
-                    diff+=(range[r]-p_sum[r])**2
+                    diff+=(ranges[r]-p_sum[r])**2
             diffs.append(diff)
         diffs/=np.sum(diffs)
         self.weights = [(1/error) for error in diffs]
@@ -184,7 +184,7 @@ class Montecarlo(object):
         laser_ranges=[]
         for i in range(len(ranges)):
             if (ranges[i] < max_range) and (intens > min_inten):
-                laser_ranges.append(range[i])
+                laser_ranges.append(ranges[i])
 
 
         self.pf.move_particles(self.dx,self.dy,self.dtheta)
