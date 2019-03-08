@@ -45,7 +45,7 @@ def find_src(global_point, local_point):
 class ParticleFilter(object):
     def __init__(self):
 
-        self.num_particles=500
+        self.num_particles=100
         self.start_x=150
         self.start_y=1250
         #second robot x=250 y=1660
@@ -118,7 +118,7 @@ class ParticleFilter(object):
                 diff = []
                 dx=self.beacons[i,0]-particle[0]
                 dy=self.beacons[i,1]-particle[1]
-                angle = atan2(dy, dx) + p[2] + np.pi
+                angle = atan2(dy, dx) + particle[2] + np.pi
                 while angle < -np.pi:
                     angle += np.pi * 2
                 while angle > np.pi:
@@ -129,7 +129,7 @@ class ParticleFilter(object):
                 y=self.beacons[i,1]
                 beacon_center=np.array([x,y,0.0]).T
                 beacon_center=cvt_global2local(beacon_center,particle)
-                for point in range(real_x):
+                for point in range(len(real_x)):
                     dx1=real_x[point]-beacon_center[0]
                     dy1=real_y[point]-beacon_center[1]
                     distance=sqrt(dx1*dx1+dy1*dy1)-50
@@ -148,7 +148,7 @@ class ParticleFilter(object):
         j = 0
         u0 = (np.random.rand() + np.arange(n)) / n
         for u in u0:
-            while j < len(C) and u > C[j]:
+            while j < len(C)-1 and u > C[j]:
                 j += 1
             indices += [j - 1]
 
@@ -176,7 +176,7 @@ class Montecarlo(object):
         self.pf=ParticleFilter()
 
         rospy.init_node('localization', anonymous=True)
-        self.position_pub = rospy.Publisher('/robot_position', Pose2D, queue_size=1)
+        self.position_pub = rospy.Publisher('/pose', Pose2D, queue_size=1)
         self.laser_sub = rospy.Subscriber('/scan', LaserScan, self.laser_callback, queue_size=1)
         self.odom_sub = rospy.Subscriber('/real', Odometry, self.odom_callback, queue_size=1)
 
