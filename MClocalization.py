@@ -7,11 +7,12 @@ import rospy
 
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Pose2D
-
+from geometry_msgs.msg import Pose, Point,Pose2D,PoseArray, Quaternion
 from threading import Lock
 import numpy as np
 import tf.transformations as tr
+import tf
+import time
 
 def cvt_local2global(local_point, sc_point):
     x, y, a = local_point.T
@@ -42,11 +43,11 @@ def find_src(global_point, local_point):
 class ParticleFilter(object):
     def __init__(self):
 
-        self.num_particles=100
+        self.num_particles=500
         self.start_x=150
         self.start_y=1250
         #second robot x=250 y=1660
-        self.start_theta=3.14
+        self.start_theta= np.pi
 
         self.beacons=np.array([[3094,1000],[-94,50],[-94,1950]])
         # or
@@ -61,7 +62,7 @@ class ParticleFilter(object):
         self.angle_noise=0.04
         xrand = np.random.normal(self.start_x, self.distance_noise, self.num_particles)
         yrand = np.random.normal(self.start_y, self.distance_noise, self.num_particles)
-        trand = np.random.normal(0.0, self.angle_noise, self.num_particles)
+        trand = np.random.normal(self.start_theta, self.angle_noise, self.num_particles)
         self.particles=np.array([xrand,yrand,trand]).T
         self.weights=[1]*self.num_particles
 
@@ -85,12 +86,13 @@ class ParticleFilter(object):
         self.particles[self.particles[:, 0] < 100, 0] = 100
         self.particles[self.particles[:, 2] > (2*np.pi) ] %=(2*np.pi)
 
+
     def calc_weights(self,ranges,intens,angles):
 
         x_coords=ranges*np.cos(angles)
         y_coords=ranges*np.sin(angles)
         landmarks = np.array([x_coords, y_coords]).T
-        particles=self.particles.copy()
+        particles= self.particles.copy()
 
         """Calculate particle weights based on their pose and landmards"""
         # determines 3 beacon positions (x,y) for every particle in it's local coords
@@ -204,6 +206,8 @@ class Montecarlo(object):
         self.position_pub = rospy.Publisher('/robot_position', Pose2D, queue_size=1)
         self.laser_sub = rospy.Subscriber('/scan', LaserScan, self.laser_callback, queue_size=1)
         self.odom_sub = rospy.Subscriber('/real', Odometry, self.odom_callback, queue_size=1)
+
+        self.particles_pub = rospy.Publisher('/particles', PoseArray,queue_size=1)
         self.mutex = Lock()
 
 
@@ -231,7 +235,7 @@ class Montecarlo(object):
         self.pf.resample_and_update()
         res=self.pf.calc_pose()
 
-        self.position_pub.publish(Pose2D(res[0] / 1000, res[1] / 1000, res[2]))
+        self.position_pub.publish(Pose2D(res[0]/1000,res[1]/1000,res[2]))
 
     def laser_callback(self,msg):
 
@@ -258,15 +262,11 @@ class Montecarlo(object):
                                self.last_odom.pose.pose.orientation.y,
                                self.last_odom.pose.pose.orientation.z,
                                self.last_odom.pose.pose.orientation.w])
-
             rot_last = tr.quaternion_matrix(q_last)[0:3, 0:3]
-
             p_last_curr = rot_last.transpose().dot(p_curr - p_last)
             q_last_curr = tr.quaternion_multiply(tr.quaternion_inverse(q_last), q_curr)
-
             _, _, diff = tr.euler_from_quaternion(q_last_curr)
-
-            self.dtheta = diff% (2*np.pi)
+            self.dtheta = diff % (2*np.pi)
             self.dx = (p_last_curr[0]) * 1000
             self.dy = (p_last_curr[1]) * 1000
 
@@ -275,6 +275,23 @@ class Montecarlo(object):
         self.handle_odometry(msg)
         self.mutex.release()
 
+    def publish_particle_rviz(self):
+        # Publishes the particles of the particle filter in rviz
+        poses = PoseArray()
+        poses.header.stamp = rospy.Time.now()
+        poses.header.frame_id = "map"
+        for p in self.pf.particles:
+            point=Point(p[0]/1000,p[1]/1000,0)
+            direction=p[2]
+            quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
+            poses.poses.append(Pose(point, quat))
+
+        self.particles_pub.publish(poses)
+
+    def run(self):
+        while not rospy.is_shutdown():
+            self.publish_particle_rviz()
+        time.sleep(1 / 30)
 
 MCL=Montecarlo()
-rospy.spin()
+MCL.run()

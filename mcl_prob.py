@@ -13,8 +13,9 @@ import tf.transformations as tr
 from math import sqrt,atan2 ,exp
 from scipy.stats import norm
 from std_msgs.msg import String, Header, ColorRGBA
-from geometry_msgs.msg import Twist, PoseStamped, Point,Pose2D
-from visualization_msgs.msg import Marker, MarkerArray
+from geometry_msgs.msg import Pose, Point,Pose2D,PoseArray, Quaternion
+import time
+import tf
 
 
 def cvt_local2global(local_point, sc_point):
@@ -47,10 +48,10 @@ class ParticleFilter(object):
     def __init__(self):
 
         self.num_particles=100
-        self.start_x=300
+        self.start_x=150
         self.start_y=1250
         #second robot x=250 y=1660
-        self.start_theta=0.0
+        self.start_theta= np.pi
 
         self.beacons=np.array([[3094,1000],[-94,50],[-94,1950]])
         # or
@@ -65,7 +66,7 @@ class ParticleFilter(object):
         self.angle_noise=0.04
         xrand = np.random.normal(self.start_x, self.distance_noise, self.num_particles)
         yrand = np.random.normal(self.start_y, self.distance_noise, self.num_particles)
-        trand = np.random.normal(0.0, self.angle_noise, self.num_particles)
+        trand = np.random.normal(self.start_theta, self.angle_noise, self.num_particles)
         self.particles=np.array([xrand,yrand,trand]).T
         self.weights=[1]*self.num_particles
 
@@ -74,8 +75,6 @@ class ParticleFilter(object):
         return np.exp(- ((x - mu) ** 2) / (sigma ** 2) / 2.0) / np.sqrt(2.0 * np.pi * (sigma ** 2))
 
     def move_particles(self,dx,dy,dtheta):
-        if dx<0.0001 and dy<0.0001 and dtheta<= 0.01:
-            return
         x_noise = np.random.normal(0, self.distance_noise/4, self.num_particles)
         move_x=dx+x_noise
         y_noise = np.random.normal(0, self.distance_noise/4, self.num_particles)
@@ -166,7 +165,7 @@ class Montecarlo(object):
         self.position_pub = rospy.Publisher('/robot_position', Pose2D, queue_size=1)
         self.laser_sub = rospy.Subscriber('/scan', LaserScan, self.laser_callback, queue_size=1)
         self.odom_sub = rospy.Subscriber('/real', Odometry, self.odom_callback, queue_size=1)
-        self.particles_pub = rospy.Publisher('/husky_1/particle_filter/particles', MarkerArray, queue_size=1)
+        self.particles_pub = rospy.Publisher('/particles', PoseArray, queue_size=1)
         self.mutex = Lock()
 
 
@@ -201,7 +200,7 @@ class Montecarlo(object):
         self.handle_observation(msg)
         self.mutex.release()
 
-    def handle_odometry(self,odom):
+    def handle_odometry(self, odom):
 
         self.last_odom = self.curr_odom
         self.curr_odom = odom
@@ -220,15 +219,11 @@ class Montecarlo(object):
                                self.last_odom.pose.pose.orientation.y,
                                self.last_odom.pose.pose.orientation.z,
                                self.last_odom.pose.pose.orientation.w])
-
             rot_last = tr.quaternion_matrix(q_last)[0:3, 0:3]
-
             p_last_curr = rot_last.transpose().dot(p_curr - p_last)
             q_last_curr = tr.quaternion_multiply(tr.quaternion_inverse(q_last), q_curr)
-
             _, _, diff = tr.euler_from_quaternion(q_last_curr)
-
-            self.dtheta = diff% (2*np.pi)
+            self.dtheta = diff % (2 * np.pi)
             self.dx = (p_last_curr[0]) * 1000
             self.dy = (p_last_curr[1]) * 1000
 
@@ -237,6 +232,24 @@ class Montecarlo(object):
         self.handle_odometry(msg)
         self.mutex.release()
 
+    def publish_particle_rviz(self):
+        # Publishes the particles of the particle filter in rviz
+        poses = PoseArray()
+        poses.header.stamp = rospy.Time.now()
+        poses.header.frame_id = "map"
+        for p in self.pf.particles:
+            point=Point(p[0]/1000,p[1]/1000,0)
+            direction=p[2]
+            quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
+            poses.poses.append(Pose(point, quat))
+
+        self.particles_pub.publish(poses)
+
+    def run(self):
+        while not rospy.is_shutdown():
+            self.publish_particle_rviz()
+        time.sleep(1 / 30)
+
 
 MCL=Montecarlo()
-rospy.spin()
+MCL.run()

@@ -13,8 +13,11 @@ import tf.transformations as tr
 from math import sqrt,atan2 ,exp
 from scipy.stats import norm
 from std_msgs.msg import String, Header, ColorRGBA
-from geometry_msgs.msg import Pose, Point,Pose2D,PoseArray
+from geometry_msgs.msg import Pose, Point,Pose2D,PoseArray, Quaternion
 from visualization_msgs.msg import Marker, MarkerArray
+import time
+
+import tf
 
 
 def cvt_local2global(local_point, sc_point):
@@ -46,11 +49,11 @@ def find_src(global_point, local_point):
 class ParticleFilter(object):
     def __init__(self):
 
-        self.num_particles=100
+        self.num_particles=1000
         self.start_x=150
         self.start_y=1250
         #second robot x=250 y=1660
-        self.start_theta=3.14
+        self.start_theta= np.pi
 
         self.beacons=np.array([[3094.0,1000.0],[-94.0,50.0],[-94.0,1950.0]])
         # or
@@ -65,36 +68,36 @@ class ParticleFilter(object):
         self.angle_noise=0.04
         xrand = np.random.normal(self.start_x, self.distance_noise, self.num_particles)
         yrand = np.random.normal(self.start_y, self.distance_noise, self.num_particles)
-        trand = np.random.normal(0.0, self.angle_noise, self.num_particles)
+        trand = np.random.normal(self.start_theta, self.angle_noise, self.num_particles)
         self.particles=np.array([xrand,yrand,trand]).T
-        self.weights=[1]*self.num_particles
+        self.weights=np.ones(self.num_particles)
 
     @staticmethod
     def gaus(x, mu=0, sigma=1):
         return np.exp(- ((x - mu) ** 2) / (sigma ** 2) / 2.0) / np.sqrt(2.0 * np.pi * (sigma ** 2))
 
-    def move_particles(self,dx,dy,dtheta):
+    def move_particles(self, dx, dy, dtheta):
 
-        x_noise = np.random.normal(0, self.distance_noise/4, self.num_particles)
-        move_x=dx+x_noise
-        y_noise = np.random.normal(0, self.distance_noise/4, self.num_particles)
-        move_y=dy+y_noise
-        angle_noise = np.random.normal(0, self.angle_noise/2, self.num_particles)
-        move_theta=dtheta+angle_noise
-        self.particles[:,0] += move_x
-        self.particles[:,1] += move_y
-        self.particles[:,2] += move_theta
+        x_noise = np.random.normal(0, self.distance_noise / 4, self.num_particles)
+        move_x = dx + x_noise
+        y_noise = np.random.normal(0, self.distance_noise / 4, self.num_particles)
+        move_y = dy + y_noise
+        angle_noise = np.random.normal(0, self.angle_noise / 2, self.num_particles)
+        move_theta = dtheta + angle_noise
+        move_point = np.array([move_x, move_y, move_theta]).T
+        self.particles = cvt_local2global(move_point, self.particles)
         self.particles[self.particles[:, 1] > 2000 - 100, 1] = 2000 - 100
         self.particles[self.particles[:, 1] < 0, 1] = 0
         self.particles[self.particles[:, 0] > 3000 - 100, 0] = 3000 - 100
         self.particles[self.particles[:, 0] < 100, 0] = 100
-        self.particles[self.particles[:, 2] > (2*np.pi) ] %=(2*np.pi)
+        self.particles[self.particles[:, 2] > (2 * np.pi)] %= (2 * np.pi)
 
     def calc_weights(self,p_sum,angle_min,angle_increment):
 
+        #print(self.weights)
         diffs=[]
         for p in self.particles:
-            diff=0
+            diff=0.0
             for b in self.beacons:
                 dx=p[0]-b[0]
                 dy=p[1]-b[1]
@@ -104,15 +107,17 @@ class ParticleFilter(object):
                 while angle>np.pi:
                     angle-=np.pi*2
                 angle=angle-angle_min
+                #print(angle)
                 angle_ind = int(angle / angle_increment)
-                if angle_ind>0 and angle_ind<1081 and p_sum[angle_ind]>0.0:
+                if angle_ind>0.0 and angle_ind<1081.0 and p_sum[angle_ind]>10:
                     distance=sqrt(dx*dx+dy*dy)-50
+                    #print(p_sum[angle_ind]-distance)
                     diff+=((p_sum[angle_ind]-distance)**2)/p_sum[angle_ind]
             diffs.append(diff)
-        #diffs/=np.sum(diffs)
+        diffs/=np.sum(diffs)
         self.best=np.argmin(diffs)
-        self.weights = [exp(-error) for error in diffs]
-        #self.weights/=np.sum(self.weights)
+        self.weights = [1/error for error in diffs]
+        self.weights/=np.sum(self.weights)
 
 
     def resample_and_update(self):
@@ -124,7 +129,7 @@ class ParticleFilter(object):
         j = 0
         u0 = (np.random.rand() + np.arange(n)) / n
         for u in u0:
-            while j < len(C)-1 and u > C[j]:
+            while j < len(C) and u > C[j]:
                 j += 1
             indices += [j - 1]
 
@@ -139,15 +144,6 @@ class ParticleFilter(object):
         angle = np.mean(temporary) % (2.0 * np.pi)
         return np.array((x, y, angle))
 
-    def weighted_mean(self):
-        x = np.sum(self.particles[:, 0]*self.weights)/np.sum(self.weights)
-        y = np.sum(self.particles[:, 1] * self.weights) / np.sum(self.weights)
-        zero_elem = self.particles[0, 2]
-        # this helps if particles angles are close to 0 or 2*pi
-        temporary = ((self.particles[:, 2] - zero_elem + np.pi) % (2.0 * np.pi)) + zero_elem - np.pi
-        angle = (np.sum(temporary*self.weights)/np.sum(self.weights)) % (2.0 * np.pi)
-        return np.array((x,y,angle))
-
 class Montecarlo(object):
     def __init__(self):
 
@@ -161,12 +157,12 @@ class Montecarlo(object):
         self.pf=ParticleFilter()
 
         rospy.init_node('localization', anonymous=True)
-        self.position_pub = rospy.Publisher('/robot_position', Pose2D, queue_size=1)
+        self.position_pub = rospy.Publisher('/pose', Pose2D, queue_size=1)
         self.laser_sub = rospy.Subscriber('/scan', LaserScan, self.laser_callback, queue_size=1)
         self.odom_sub = rospy.Subscriber('/real', Odometry, self.odom_callback, queue_size=1)
 
         self.particles_pub = rospy.Publisher('/particles', PoseArray,queue_size=1)
-
+        self.r = rospy.Rate(60.0)
         self.mutex = Lock()
 
 
@@ -203,15 +199,11 @@ class Montecarlo(object):
                     p_sum += (ranges[ind_mean]) * (p/np.max(p))
                     sum = 0
 
-        self.pf.move_particles(self.dx,self.dy,self.dtheta)
-        self.pf.calc_weights(p_sum,angle_min,angle_increment)
-        x=self.pf.particles[self.pf.best][0]
-        y=self.pf.particles[self.pf.best][1]
-        theta=self.pf.particles[self.pf.best][2]
-        res=np.array((x,y,theta))
+        self.pf.move_particles(self.dx, self.dy, self.dtheta)
+        self.pf.calc_weights(ranges, angle_min, angle_increment)
         self.pf.resample_and_update()
-        #res=self.pf.calc_pose()
-        self.publish_particle_rviz()
+        res = self.pf.calc_pose()
+
         self.position_pub.publish(Pose2D(res[0]/1000,res[1]/1000,res[2]))
 
     def laser_callback(self,msg):
@@ -220,7 +212,7 @@ class Montecarlo(object):
         self.handle_observation(msg)
         self.mutex.release()
 
-    def handle_odometry(self,odom):
+    def handle_odometry(self, odom):
 
         self.last_odom = self.curr_odom
         self.curr_odom = odom
@@ -239,15 +231,11 @@ class Montecarlo(object):
                                self.last_odom.pose.pose.orientation.y,
                                self.last_odom.pose.pose.orientation.z,
                                self.last_odom.pose.pose.orientation.w])
-
             rot_last = tr.quaternion_matrix(q_last)[0:3, 0:3]
-
             p_last_curr = rot_last.transpose().dot(p_curr - p_last)
             q_last_curr = tr.quaternion_multiply(tr.quaternion_inverse(q_last), q_curr)
-
             _, _, diff = tr.euler_from_quaternion(q_last_curr)
-
-            self.dtheta = diff% (2*np.pi)
+            self.dtheta = diff % (2 * np.pi)
             self.dx = (p_last_curr[0]) * 1000
             self.dy = (p_last_curr[1]) * 1000
 
@@ -258,25 +246,22 @@ class Montecarlo(object):
 
 
     def publish_particle_rviz(self):
-        """ Publishes the particles of the particle filter in rviz"""
-        msg=PoseArray()
-        msg.header.stamp=rospy.Time.now()
-        msg.header.frame_id="map"
+        # Publishes the particles of the particle filter in rviz
+        poses = PoseArray()
+        poses.header.stamp = rospy.Time.now()
+        poses.header.frame_id = "map"
         for p in self.pf.particles:
-            pose=Pose()
-            pose.position.x=p[0]
-            pose.position.y=p[1]
-            pose.position.z=0.0
+            point=Point(p[0]/1000,p[1]/1000,0)
+            direction=p[2]
+            quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
+            poses.poses.append(Pose(point, quat))
 
-            pose.orientation.x=0.0
-            pose.orientation.y=0.0
-            pose.orientation.z=1.0
-            pose.orientation.w=0.0
+        self.particles_pub.publish(poses)
 
-            msg.poses.append(pose)
-
-        self.particles_pub.publish(msg)
-
+    def run(self):
+        while not rospy.is_shutdown():
+            self.publish_particle_rviz()
+        time.sleep(1 / 30)
 
 MCL=Montecarlo()
-rospy.spin()
+MCL.run()
