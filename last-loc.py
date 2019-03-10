@@ -45,7 +45,7 @@ def find_src(global_point, local_point):
 class ParticleFilter(object):
     def __init__(self):
 
-        self.num_particles=100
+        self.num_particles=500
         self.start_x=150
         self.start_y=1250
         #second robot x=250 y=1660
@@ -62,8 +62,8 @@ class ParticleFilter(object):
 
 
 
-        self.distance_noise=5
-        self.angle_noise=0.04
+        self.distance_noise=50
+        self.angle_noise=0.08
 
         #init_particles
         xrand = np.random.normal(self.start_x, self.distance_noise, self.num_particles)
@@ -72,6 +72,7 @@ class ParticleFilter(object):
         self.particles=np.array([xrand,yrand,trand]).T
         self.weights=[1]*self.num_particles
 
+        """
         #beacons points in global frame
         self.beacons_points=[]
         r = self.beacon_r
@@ -87,14 +88,16 @@ class ParticleFilter(object):
                 beacon_points.append(point2)
                 x+=1
             self.beacons_points.append(beacon_points)
+        """
 
     def move_particles(self,dx,dy,dtheta):
-
-        x_noise = np.random.normal(0, self.distance_noise, self.num_particles)
+        if dx<0.00001 and dy<0.00001 and dtheta<0.00001:
+            return
+        x_noise = np.random.normal(0, self.distance_noise/2, self.num_particles)
         move_x=dx+x_noise
-        y_noise = np.random.normal(0, self.distance_noise, self.num_particles)
+        y_noise = np.random.normal(0, self.distance_noise/2, self.num_particles)
         move_y=dy+y_noise
-        angle_noise = np.random.normal(0, self.angle_noise, self.num_particles)
+        angle_noise = np.random.normal(0, self.angle_noise/4, self.num_particles)
         move_theta=dtheta+angle_noise
         move_point=np.array([move_x,move_y,move_theta]).T
         self.particles = cvt_local2global(move_point, self.particles)
@@ -105,39 +108,61 @@ class ParticleFilter(object):
         self.particles[self.particles[:, 2] > (2*np.pi) ] %=(2*np.pi)
 
 
-    def calc_weights(self,real_x,real_y,angle_min,angle_max):
+    def calc_weights(self,real_points):
 
         #beacons in particles frame
         #bs=[]
         #for i in range(3):
             #bs.append(cvt_global2local(self.beacons_points[:,i], self.particles))
+        """
         errors=[]
         for particle in self.particles:
-            norm_error=0
+            diff=0
+
             for i in range(3):
-                diff = []
-                dx=self.beacons[i,0]-particle[0]
-                dy=self.beacons[i,1]-particle[1]
-                angle = atan2(dy, dx) + particle[2] + np.pi
-                while angle < -np.pi:
-                    angle += np.pi * 2
-                while angle > np.pi:
-                    angle -= np.pi * 2
-                if angle<angle_min or angle>angle_max:
-                    continue
-                x=self.beacons[i,0]
-                y=self.beacons[i,1]
-                beacon_center=np.array([x,y,0.0]).T
-                beacon_center=cvt_global2local(beacon_center,particle)
-                for point in range(len(real_x)):
-                    dx1=real_x[point]-beacon_center[0]
-                    dy1=real_y[point]-beacon_center[1]
-                    distance=sqrt(dx1*dx1+dy1*dy1)-50
-                    diff.append(distance)
-                norm_error = np.linalg.norm(diff)
-                norm_error = norm_error ** 2
-            errors.append(norm_error)
+                # beacon center in particle frame
+                x = self.beacons[i, 0]
+                y = self.beacons[i, 1]
+                beacon_center = np.array([x, y, 0.0]).T
+                center = cvt_global2local(beacon_center, particle)
+                #determine which real set to comapre
+                for set in real_points:
+                    dx=center[0]-set[0][0]
+                    dy=center[1]-set[0][1]
+                    distance=sqrt(dx*dx+dy*dy)
+                    #print(distance)
+                    #print(ind,angle,start_angles[ind])
+                    if distance<350:
+                        # distance between each points  from real set and the beacon center
+                        for point in set:
+                            #print(point,center)
+                            dx1=point[0]-center[0]
+                            dy1=point[1]-center[1]
+                            distance=sqrt(dx1*dx1+dy1*dy1)-50
+                            #print(distance)
+                            diff+=distance**2
+            if diff==0:
+                diff= 10**9
+            errors.append(diff)
         self.weights = [exp(-error) for error in errors]
+        #print(self.particles[np.argmax(self.weights)])
+        """
+        probs=[]
+        for particle in self.particles:
+            I=0
+            for b in self.beacons:
+                x = b[0]
+                y = b[1]
+                beacon_center = np.array([x, y, 0.0]).T
+                center = cvt_global2local(beacon_center, particle)
+                for point in real_points:
+                    dx=point[0]-center[0]
+                    dy=point[1]-center[1]
+                    distance=abs(sqrt(dx*dx+dy*dy)-50)
+                    I+=(1/(1+distance))
+            probs.append(I)
+        probs/=np.sum(probs)
+        self.weights=[prob for prob in probs]
 
     def resample_and_update(self):
 
@@ -194,21 +219,40 @@ class Montecarlo(object):
         ranges = [x * 1000 for x in ranges]
         intens = list(laser_scan_msg.intensities)
         angles = np.arange(laser_scan_msg.angle_min, laser_scan_msg.angle_max, laser_scan_msg.angle_increment)
-        angle_min=laser_scan_msg.angle_min
-        angle_max=laser_scan_msg.angle_max
 
-        real_x=[]
-        real_y=[]
+        real_points=[]
+        real_set=[]
+        old=0
+        """
         for i in range(len(ranges)):
-            if (ranges[i] < max_range) and (intens > min_inten):
-                real_x.append(ranges[i] * np.cos(angles[i]))
-                real_y.append(ranges[i] * np.sin(angles[i]))
+            if (ranges[i] < max_range) and (intens[i] > min_inten):
+                if old==0:
+                    old=1
+                x=ranges[i] * np.cos(angles[i])
+                y=ranges[i] * np.sin(angles[i])
+                point=np.array([x,y]).T
+                #print(point)
+                real_set.append(point)
+            elif old==1:
+                old=0
+                real_points.append(real_set)
+                real_set=[]
+        #x=input()
+        #print(len(real_x))
+        """
+
+        for i in range(len(ranges)) :
+            if (ranges[i] < max_range) and (intens[i] > min_inten):
+                x = ranges[i] * np.cos(angles[i])
+                y = ranges[i] * np.sin(angles[i])
+                point=np.array([x,y]).T
+                real_points.append(point)
 
         self.pf.move_particles(self.dx,self.dy,self.dtheta)
-        self.pf.calc_weights(real_x,real_y,angle_min,angle_max)
+        self.pf.calc_weights(real_points)
         self.pf.resample_and_update()
         res=self.pf.calc_pose()
-
+        print(res)
         self.position_pub.publish(Pose2D(res[0]/1000,res[1]/1000,res[2]))
 
     def laser_callback(self,msg):
