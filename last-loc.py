@@ -7,7 +7,7 @@ import rospy
 
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Pose, Point,Pose2D,PoseArray, Quaternion
+from geometry_msgs.msg import PoseStamped,Pose, Point,Pose2D,PoseArray, Quaternion
 from threading import Lock
 import numpy as np
 import tf.transformations as tr
@@ -45,11 +45,11 @@ def find_src(global_point, local_point):
 class ParticleFilter(object):
     def __init__(self):
 
-        self.num_particles=500
+        self.num_particles=100
         self.start_x=150
         self.start_y=1250
         #second robot x=250 y=1660
-        self.start_theta= np.pi
+        self.start_theta= np.pi+0.1
 
         self.beacons=np.array([[3094,1000],[-94,50],[-94,1950]])
         self.beacon_r=50
@@ -65,12 +65,15 @@ class ParticleFilter(object):
         self.distance_noise=50
         self.angle_noise=0.08
 
+        self.init_particles(self.start_x,self.start_y,self.start_theta,scale=1)
+        self.weights = [1] * self.num_particles
+
+    def init_particles(self,x,y,th,scale):
         #init_particles
-        xrand = np.random.normal(self.start_x, self.distance_noise, self.num_particles)
-        yrand = np.random.normal(self.start_y, self.distance_noise, self.num_particles)
-        trand = np.random.normal(self.start_theta, self.angle_noise, self.num_particles)
+        xrand = np.random.normal(x, self.distance_noise*scale, self.num_particles)
+        yrand = np.random.normal(y, self.distance_noise*scale, self.num_particles)
+        trand = np.random.normal(th, self.angle_noise*scale, self.num_particles)
         self.particles=np.array([xrand,yrand,trand]).T
-        self.weights=[1]*self.num_particles
 
         """
         #beacons points in global frame
@@ -91,8 +94,7 @@ class ParticleFilter(object):
         """
 
     def move_particles(self,dx,dy,dtheta):
-        if dx<0.00001 and dy<0.00001 and dtheta<0.00001:
-            return
+
         x_noise = np.random.normal(0, self.distance_noise/2, self.num_particles)
         move_x=dx+x_noise
         y_noise = np.random.normal(0, self.distance_noise/2, self.num_particles)
@@ -147,22 +149,26 @@ class ParticleFilter(object):
         self.weights = [exp(-error) for error in errors]
         #print(self.particles[np.argmax(self.weights)])
         """
-        probs=[]
+        probs = []
         for particle in self.particles:
-            I=0
+            I = 0
+
             for b in self.beacons:
                 x = b[0]
                 y = b[1]
                 beacon_center = np.array([x, y, 0.0]).T
                 center = cvt_global2local(beacon_center, particle)
                 for point in real_points:
-                    dx=point[0]-center[0]
-                    dy=point[1]-center[1]
-                    distance=abs(sqrt(dx*dx+dy*dy)-50)
-                    I+=(1/(1+distance))
+                    dx = point[0] - center[0]
+                    dy = point[1] - center[1]
+                    distance = abs(sqrt(dx * dx + dy * dy) - 50)
+                    I += (1 / (1 + distance**2))
             probs.append(I)
-        probs/=np.sum(probs)
-        self.weights=[prob for prob in probs]
+            #print(np.max(probs))
+        probs /= np.sum(probs)
+
+        self.weights = [prob for prob in probs]
+
 
     def resample_and_update(self):
 
@@ -202,6 +208,9 @@ class Montecarlo(object):
 
         rospy.init_node('localization', anonymous=True)
         self.position_pub = rospy.Publisher('/pose', Pose2D, queue_size=1)
+        self.lasbea_pub = rospy.Publisher('/lasbea',PoseArray , queue_size=1)
+        self.beacon_pub = rospy.Publisher('/bea1', PoseArray, queue_size=1)
+
         self.laser_sub = rospy.Subscriber('/scan', LaserScan, self.laser_callback, queue_size=1)
         self.odom_sub = rospy.Subscriber('/real', Odometry, self.odom_callback, queue_size=1)
 
@@ -240,7 +249,6 @@ class Montecarlo(object):
         #x=input()
         #print(len(real_x))
         """
-
         for i in range(len(ranges)) :
             if (ranges[i] < max_range) and (intens[i] > min_inten):
                 x = ranges[i] * np.cos(angles[i])
@@ -252,8 +260,43 @@ class Montecarlo(object):
         self.pf.calc_weights(real_points)
         self.pf.resample_and_update()
         res=self.pf.calc_pose()
-        print(res)
+        #res= self.pf.particles[self.pf.best]
         self.position_pub.publish(Pose2D(res[0]/1000,res[1]/1000,res[2]))
+
+        poses=PoseArray()
+        poses.header.stamp = rospy.Time.now()
+        poses.header.frame_id = "map"
+        point = Point(res[0] / 1000, res[1] / 1000, 0)
+        direction = res[2]
+        quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
+        poses.poses.append(Pose(point, quat))
+        for p in real_points:
+            x = p[0]
+            y = p[1]
+            point = np.array([x, y, 0.0]).T
+            point= cvt_local2global(point, res)
+            point = Point(point[0] / 1000, point[1] / 1000, 0)
+            direction = 0.0
+            quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
+            poses.poses.append(Pose(point, quat))
+        self.lasbea_pub.publish(poses)
+
+        poses = PoseArray()
+        poses.header.stamp = rospy.Time.now()
+        poses.header.frame_id = "map"
+        for b in self.pf.beacons:
+            x = b[0]
+            y = b[1]
+            beacon_center = np.array([x, y, 0.0]).T
+            point = cvt_global2local(beacon_center, res)
+            point=cvt_local2global(point,res)
+            point = Point(point[0] / 1000, point[1] / 1000, 0)
+            direction = 0.0
+            quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
+            poses.poses.append(Pose(point, quat))
+        self.beacon_pub.publish(poses)
+
+
 
     def laser_callback(self,msg):
 
