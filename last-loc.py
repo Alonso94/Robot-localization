@@ -13,7 +13,7 @@ import numpy as np
 import tf.transformations as tr
 import tf
 import time
-from math import sqrt,atan2,exp
+from math import sqrt,atan2,exp,pow
 
 def cvt_local2global(local_point, sc_point):
     x, y, a = local_point.T
@@ -45,11 +45,11 @@ def find_src(global_point, local_point):
 class ParticleFilter(object):
     def __init__(self):
 
-        self.num_particles=100
-        self.start_x=150
+        self.num_particles=200
+        self.start_x=450
         self.start_y=1250
         #second robot x=250 y=1660
-        self.start_theta= np.pi+0.1
+        self.start_theta= np.pi/1.2
 
         self.beacons=np.array([[3094,1000],[-94,50],[-94,1950]])
         self.beacon_r=50
@@ -65,7 +65,7 @@ class ParticleFilter(object):
         self.distance_noise=50
         self.angle_noise=0.08
 
-        self.init_particles(self.start_x,self.start_y,self.start_theta,scale=1)
+        self.init_particles(self.start_x,self.start_y,self.start_theta,scale=5)
         self.weights = [1] * self.num_particles
 
     def init_particles(self,x,y,th,scale):
@@ -95,11 +95,11 @@ class ParticleFilter(object):
 
     def move_particles(self,dx,dy,dtheta):
 
-        x_noise = np.random.normal(0, self.distance_noise/2, self.num_particles)
+        x_noise = np.random.normal(0, self.distance_noise, self.num_particles)
         move_x=dx+x_noise
-        y_noise = np.random.normal(0, self.distance_noise/2, self.num_particles)
+        y_noise = np.random.normal(0, self.distance_noise, self.num_particles)
         move_y=dy+y_noise
-        angle_noise = np.random.normal(0, self.angle_noise/4, self.num_particles)
+        angle_noise = np.random.normal(0, self.angle_noise, self.num_particles)
         move_theta=dtheta+angle_noise
         move_point=np.array([move_x,move_y,move_theta]).T
         self.particles = cvt_local2global(move_point, self.particles)
@@ -162,7 +162,7 @@ class ParticleFilter(object):
                     dx = point[0] - center[0]
                     dy = point[1] - center[1]
                     distance = abs(sqrt(dx * dx + dy * dy) - 50)
-                    I += (1 / (1 + distance**2))
+                    I += (1 / (1 + pow(distance,0.5)))
             probs.append(I)
             #print(np.max(probs))
         probs /= np.sum(probs)
@@ -351,8 +351,9 @@ class Montecarlo(object):
 
     def run(self):
         while not rospy.is_shutdown():
-            self.publish_particle_rviz()
-        time.sleep(1 / 30)
+            #self.publish_particle_rviz()
+
+            time.sleep(1 / 30)
 
 MCL=Montecarlo()
 MCL.run()

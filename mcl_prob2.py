@@ -162,6 +162,9 @@ class Montecarlo(object):
         self.odom_sub = rospy.Subscriber('/real', Odometry, self.odom_callback, queue_size=1)
 
         self.particles_pub = rospy.Publisher('/particles', PoseArray,queue_size=1)
+        self.lasbea_pub = rospy.Publisher('/lasbea', PoseArray, queue_size=1)
+        self.beacon_pub = rospy.Publisher('/bea1', PoseArray, queue_size=1)
+
         self.r = rospy.Rate(60.0)
         self.mutex = Lock()
 
@@ -181,9 +184,14 @@ class Montecarlo(object):
         sum=0
         start=0
         ranges_after=np.zeros(len(ranges))
+        real_points=[]
         p_sum = np.zeros(len(ranges))
         for i in range(len(ranges)):
             if (ranges[i] < max_range) and (intens[i] > min_inten):
+                x = ranges[i] * np.cos(angles[i])
+                y = ranges[i] * np.sin(angles[i])
+                point = np.array([x, y]).T
+                real_points.append(point)
                 if l == 0:
                     l = 1
                     start = i
@@ -205,6 +213,39 @@ class Montecarlo(object):
         res = self.pf.calc_pose()
 
         self.position_pub.publish(Pose2D(res[0]/1000,res[1]/1000,res[2]))
+
+        poses = PoseArray()
+        poses.header.stamp = rospy.Time.now()
+        poses.header.frame_id = "map"
+        point = Point(res[0] / 1000, res[1] / 1000, 0)
+        direction = res[2]
+        quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
+        poses.poses.append(Pose(point, quat))
+        for p in real_points:
+            x = p[0]
+            y = p[1]
+            point = np.array([x, y, 0.0]).T
+            point = cvt_local2global(point, res)
+            point = Point(point[0] / 1000, point[1] / 1000, 0)
+            direction = 0.0
+            quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
+            poses.poses.append(Pose(point, quat))
+        self.lasbea_pub.publish(poses)
+
+        poses = PoseArray()
+        poses.header.stamp = rospy.Time.now()
+        poses.header.frame_id = "map"
+        for b in self.pf.beacons:
+            x = b[0]
+            y = b[1]
+            beacon_center = np.array([x, y, 0.0]).T
+            point = cvt_global2local(beacon_center, res)
+            point = cvt_local2global(point, res)
+            point = Point(point[0] / 1000, point[1] / 1000, 0)
+            direction = 0.0
+            quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
+            poses.poses.append(Pose(point, quat))
+        self.beacon_pub.publish(poses)
 
     def laser_callback(self,msg):
 
