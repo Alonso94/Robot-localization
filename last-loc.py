@@ -32,16 +32,6 @@ def cvt_global2local(global_point, sc_point):
     a1 = (a - A) % (2 * np.pi)
     return np.array([x1, y1, a1]).T
 
-
-def find_src(global_point, local_point):
-    x, y, a = local_point.T
-    x1, y1, a1 = global_point.T
-    A = (a1 - a) % (2 * np.pi)
-    X = x1 - x * np.cos(A) + y * np.sin(A)
-    Y = y1 - x * np.sin(A) - y * np.cos(A)
-    return np.array([X, Y, A]).T
-
-
 class ParticleFilter(object):
     def __init__(self):
 
@@ -49,7 +39,8 @@ class ParticleFilter(object):
         self.start_x=450
         self.start_y=1250
         #second robot x=250 y=1660
-        self.start_theta= np.pi/1.2
+        self.start_theta= np.pi/2.0
+        self.res=np.array((self.start_x,self.start_y,self.start_theta))
 
         self.beacons=np.array([[3094,1000],[-94,50],[-94,1950]])
         self.beacon_r=50
@@ -65,33 +56,15 @@ class ParticleFilter(object):
         self.distance_noise=50
         self.angle_noise=0.08
 
-        self.init_particles(self.start_x,self.start_y,self.start_theta,scale=5)
+        self.init_particles(self.res,scale=1)
         self.weights = [1] * self.num_particles
 
-    def init_particles(self,x,y,th,scale):
+    def init_particles(self,pose,scale):
         #init_particles
-        xrand = np.random.normal(x, self.distance_noise*scale, self.num_particles)
-        yrand = np.random.normal(y, self.distance_noise*scale, self.num_particles)
-        trand = np.random.normal(th, self.angle_noise*scale, self.num_particles)
+        xrand = np.random.normal(pose[0], self.distance_noise*scale, self.num_particles)
+        yrand = np.random.normal(pose[1], self.distance_noise*scale, self.num_particles)
+        trand = np.random.normal(pose[2], self.angle_noise*scale, self.num_particles)
         self.particles=np.array([xrand,yrand,trand]).T
-
-        """
-        #beacons points in global frame
-        self.beacons_points=[]
-        r = self.beacon_r
-        for b in self.beacons:
-            beacon_points=[]
-            x=b[0]-r
-            while x<b[0]+r:
-                y1=b[1]+sqrt(r*r+x*x)
-                y2=b[1]-sqrt(r*r+x*x)
-                point1=np.array([x,y1,0.0]).T
-                point2=np.array([x,y2,0.0]).T
-                beacon_points.append(point1)
-                beacon_points.append(point2)
-                x+=1
-            self.beacons_points.append(beacon_points)
-        """
 
     def move_particles(self,dx,dy,dtheta):
 
@@ -112,43 +85,6 @@ class ParticleFilter(object):
 
     def calc_weights(self,real_points):
 
-        #beacons in particles frame
-        #bs=[]
-        #for i in range(3):
-            #bs.append(cvt_global2local(self.beacons_points[:,i], self.particles))
-        """
-        errors=[]
-        for particle in self.particles:
-            diff=0
-
-            for i in range(3):
-                # beacon center in particle frame
-                x = self.beacons[i, 0]
-                y = self.beacons[i, 1]
-                beacon_center = np.array([x, y, 0.0]).T
-                center = cvt_global2local(beacon_center, particle)
-                #determine which real set to comapre
-                for set in real_points:
-                    dx=center[0]-set[0][0]
-                    dy=center[1]-set[0][1]
-                    distance=sqrt(dx*dx+dy*dy)
-                    #print(distance)
-                    #print(ind,angle,start_angles[ind])
-                    if distance<350:
-                        # distance between each points  from real set and the beacon center
-                        for point in set:
-                            #print(point,center)
-                            dx1=point[0]-center[0]
-                            dy1=point[1]-center[1]
-                            distance=sqrt(dx1*dx1+dy1*dy1)-50
-                            #print(distance)
-                            diff+=distance**2
-            if diff==0:
-                diff= 10**9
-            errors.append(diff)
-        self.weights = [exp(-error) for error in errors]
-        #print(self.particles[np.argmax(self.weights)])
-        """
         probs = []
         for particle in self.particles:
             I = 0
@@ -162,12 +98,13 @@ class ParticleFilter(object):
                     dx = point[0] - center[0]
                     dy = point[1] - center[1]
                     distance = abs(sqrt(dx * dx + dy * dy) - 50)
-                    I += (1 / (1 + pow(distance,0.5)))
+                    I += (1 / (1 + pow(distance,1.2)))
             probs.append(I)
-            #print(np.max(probs))
+        if np.max(probs) < 0.2 :
+            return True
         probs /= np.sum(probs)
-
         self.weights = [prob for prob in probs]
+        return False
 
 
     def resample_and_update(self):
@@ -230,25 +167,7 @@ class Montecarlo(object):
         angles = np.arange(laser_scan_msg.angle_min, laser_scan_msg.angle_max, laser_scan_msg.angle_increment)
 
         real_points=[]
-        real_set=[]
-        old=0
-        """
-        for i in range(len(ranges)):
-            if (ranges[i] < max_range) and (intens[i] > min_inten):
-                if old==0:
-                    old=1
-                x=ranges[i] * np.cos(angles[i])
-                y=ranges[i] * np.sin(angles[i])
-                point=np.array([x,y]).T
-                #print(point)
-                real_set.append(point)
-            elif old==1:
-                old=0
-                real_points.append(real_set)
-                real_set=[]
-        #x=input()
-        #print(len(real_x))
-        """
+
         for i in range(len(ranges)) :
             if (ranges[i] < max_range) and (intens[i] > min_inten):
                 x = ranges[i] * np.cos(angles[i])
@@ -257,24 +176,26 @@ class Montecarlo(object):
                 real_points.append(point)
 
         self.pf.move_particles(self.dx,self.dy,self.dtheta)
-        self.pf.calc_weights(real_points)
+        lost=self.pf.calc_weights(real_points)
+        while lost:
+            self.pf.init_particles(self.pf.res,scale=10)
+            lost=self.pf.calc_weights(real_points)
         self.pf.resample_and_update()
-        res=self.pf.calc_pose()
-        #res= self.pf.particles[self.pf.best]
-        self.position_pub.publish(Pose2D(res[0]/1000,res[1]/1000,res[2]))
+        self.pf.res=self.pf.calc_pose()
+        self.position_pub.publish(Pose2D(self.pf.res[0]/1000,self.pf.res[1]/1000,self.pf.res[2]))
 
         poses=PoseArray()
         poses.header.stamp = rospy.Time.now()
         poses.header.frame_id = "map"
-        point = Point(res[0] / 1000, res[1] / 1000, 0)
-        direction = res[2]
+        point = Point(self.pf.res[0] / 1000, self.pf.res[1] / 1000, 0)
+        direction = self.pf.res[2]
         quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
         poses.poses.append(Pose(point, quat))
         for p in real_points:
             x = p[0]
             y = p[1]
             point = np.array([x, y, 0.0]).T
-            point= cvt_local2global(point, res)
+            point= cvt_local2global(point, self.pf.res)
             point = Point(point[0] / 1000, point[1] / 1000, 0)
             direction = 0.0
             quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
@@ -288,8 +209,8 @@ class Montecarlo(object):
             x = b[0]
             y = b[1]
             beacon_center = np.array([x, y, 0.0]).T
-            point = cvt_global2local(beacon_center, res)
-            point=cvt_local2global(point,res)
+            point = cvt_global2local(beacon_center, self.pf.res)
+            point=cvt_local2global(point,self.pf.res)
             point = Point(point[0] / 1000, point[1] / 1000, 0)
             direction = 0.0
             quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
@@ -351,9 +272,9 @@ class Montecarlo(object):
 
     def run(self):
         while not rospy.is_shutdown():
-            #self.publish_particle_rviz()
+            self.publish_particle_rviz()
 
-            time.sleep(1 / 30)
+        time.sleep(1 / 30)
 
 MCL=Montecarlo()
 MCL.run()
