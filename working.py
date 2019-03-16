@@ -31,11 +31,11 @@ def cvt_global2local(global_point, sc_point):
 class ParticleFilter(object):
     def __init__(self):
 
-        self.num_particles=1000
-        self.start_x=280
+        self.num_particles=200
+        self.start_x=150
         self.start_y=1250
         #second robot x=250 y=1660
-        self.start_theta= 3.14
+        self.start_theta= np.pi
         self.res=np.array((self.start_x,self.start_y,self.start_theta))
 
         self.beacons=np.array([[3094,1000],[-94,50],[-94,1950]])
@@ -44,31 +44,31 @@ class ParticleFilter(object):
         #self.beacons=[[3094,50],[3094,1950],[-94,1000]]
 
         self.beac_dist_thresh=300
-        self.num_is_near_thresh=1.0
+        self.num_is_near_thresh=0.1
         self.sense_noise=50
 
 
 
         self.distance_noise=50
-        self.angle_noise=0.08
+        self.angle_noise=0.2
 
-        self.init_particles(self.res,scale=1,angle_scale=1)
+        self.init_particles(self.res,scale=1)
         self.weights = [1] * self.num_particles
 
-    def init_particles(self,pose,scale,angle_scale):
+    def init_particles(self,pose,scale):
         #init_particles
         xrand = np.random.normal(pose[0], self.distance_noise*scale, self.num_particles)
         yrand = np.random.normal(pose[1], self.distance_noise*scale, self.num_particles)
-        trand = np.random.normal(pose[2], self.angle_noise*angle_scale, self.num_particles)
+        trand = np.random.normal(pose[2], self.angle_noise*scale, self.num_particles)
         self.particles=np.array([xrand,yrand,trand]).T
 
-    def move_particles(self,dx,dy,dtheta,scale,angle_scale):
+    def move_particles(self,dx,dy,dtheta):
 
-        x_noise = np.random.normal(0, self.distance_noise*scale, self.num_particles)
+        x_noise = np.random.normal(0, self.distance_noise, self.num_particles)
         move_x=dx+x_noise
-        y_noise = np.random.normal(0, self.distance_noise*scale, self.num_particles)
+        y_noise = np.random.normal(0, self.distance_noise, self.num_particles)
         move_y=dy+y_noise
-        angle_noise = np.random.normal(0, self.angle_noise*angle_scale, self.num_particles)
+        angle_noise = np.random.normal(0, self.angle_noise, self.num_particles)
         move_theta=dtheta+angle_noise
         move_point=np.array([move_x,move_y,move_theta]).T
         self.particles = cvt_local2global(move_point, self.particles)
@@ -82,11 +82,10 @@ class ParticleFilter(object):
     def calc_weights(self,real_points):
 
         probs = []
-        max_seen_beacons=0
         for particle in self.particles:
-            seen_beacons=0
+            I = 0
+
             for b in self.beacons:
-                I=0
                 x = b[0]
                 y = b[1]
                 beacon_center = np.array([x, y, 0.0]).T
@@ -96,18 +95,12 @@ class ParticleFilter(object):
                     dy = point[1] - center[1]
                     distance = abs(sqrt(dx * dx + dy * dy) - 50)
                     I += (1 / (1 + pow(distance,1.2)))
-                if I > 0.04:
-                    seen_beacons+=1
-            if seen_beacons>=3:
-                probs.append(pow(10,(seen_beacons-1))*I)
-            elif seen_beacons==2:
-                probs.append(I)
-            else:
-                probs.append(0.005*I)
-            max_seen_beacons=max(max_seen_beacons,seen_beacons)
+            probs.append(I)
+        if np.max(probs) < 0.2 :
+            return True
         probs /= np.sum(probs)
         self.weights = [prob for prob in probs]
-        return max_seen_beacons
+        return False
 
 
     def resample_and_update(self):
@@ -144,8 +137,6 @@ class Montecarlo(object):
         self.dy = 0.0
         self.dtheta = 0.0
 
-        self.real_points=[]
-
         self.pf=ParticleFilter()
 
         rospy.init_node('localization', anonymous=True)
@@ -160,46 +151,42 @@ class Montecarlo(object):
         self.mutex = Lock()
 
 
-    def get_laser_points(self,ranges,intens,angles,min_inten):
-        max_range = 4000
-        real_points = []
-
-        for i in range(len(ranges)):
-            if (ranges[i] < max_range) and (intens[i] > min_inten):
-                x = ranges[i] * np.cos(angles[i])
-                y = ranges[i] * np.sin(angles[i])
-                point = np.array([x, -y]).T
-                real_points.append(point)
-        return real_points
 
     def handle_observation(self,laser_scan_msg):
         # prediction,weight updat and resampling
         # predict errors
-
+        max_range = 4000
+        min_inten = 2500
         ranges = list(laser_scan_msg.ranges)
         ranges = [x * 1000 for x in ranges]
         intens = list(laser_scan_msg.intensities)
         angles = np.arange(laser_scan_msg.angle_min, laser_scan_msg.angle_max, laser_scan_msg.angle_increment)
-        self.real_points=self.get_laser_points(ranges,intens,angles,min_inten=2500)
 
-        seen_beacons=self.pf.calc_weights(self.real_points)
-        if seen_beacons==0:
-            while seen_beacons<3:
-                self.pf.beacons=np.array([[3094,1000],[-94,50],[-94,1950],[1500,200],[1500,2050]])
-                self.pf.init_particles(self.pf.res, scale=8, angle_scale=8)
-                self.real_points=self.get_laser_points(ranges,intens,angles,min_inten=1200)
-                self.pf.calc_weights(self.real_points)
-                self.pf.resample_and_update()
-                self.pf.beacons=np.array([[3094,1000],[-94,50],[-94,1950]])
-            self.pf.calc_weights(self.real_points)
+        real_points=[]
+
+        for i in range(len(ranges)) :
+            if (ranges[i] < max_range) and (intens[i] > min_inten):
+                x = ranges[i] * np.cos(angles[i])
+                y = ranges[i] * np.sin(angles[i])
+                point=np.array([x,-y]).T
+                real_points.append(point)
+
+        self.pf.move_particles(self.dx,self.dy,self.dtheta)
+        lost=self.pf.calc_weights(real_points)
+        while lost:
+            self.pf.init_particles(self.pf.res,scale=10)
+            lost=self.pf.calc_weights(real_points)
         self.pf.resample_and_update()
         self.pf.res=self.pf.calc_pose()
         self.position_pub.publish(Pose2D(self.pf.res[0]/1000,self.pf.res[1]/1000,self.pf.res[2]))
 
-    def publish_real_points(self,real_points):
         poses=PoseArray()
         poses.header.stamp = rospy.Time.now()
         poses.header.frame_id = "map"
+        point = Point(self.pf.res[0] / 1000, self.pf.res[1] / 1000, 0)
+        direction = self.pf.res[2]
+        quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
+        poses.poses.append(Pose(point, quat))
         for p in real_points:
             x = p[0]
             y = p[1]
@@ -211,25 +198,22 @@ class Montecarlo(object):
             poses.poses.append(Pose(point, quat))
         self.lasbea_pub.publish(poses)
 
-    def publish_beacons(self):
         poses = PoseArray()
         poses.header.stamp = rospy.Time.now()
         poses.header.frame_id = "map"
-        point = Point(self.pf.res[0] / 1000, self.pf.res[1] / 1000, 0)
-        direction = self.pf.res[2]
-        quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
-        poses.poses.append(Pose(point, quat))
         for b in self.pf.beacons:
             x = b[0]
             y = b[1]
             beacon_center = np.array([x, y, 0.0]).T
             point = cvt_global2local(beacon_center, self.pf.res)
-            point = cvt_local2global(point, self.pf.res)
+            point=cvt_local2global(point,self.pf.res)
             point = Point(point[0] / 1000, point[1] / 1000, 0)
             direction = 0.0
             quat = Quaternion(*tf.transformations.quaternion_from_euler(0, 0, direction))
             poses.poses.append(Pose(point, quat))
         self.beacon_pub.publish(poses)
+
+
 
     def laser_callback(self,msg):
 
@@ -267,14 +251,6 @@ class Montecarlo(object):
     def odom_callback(self,msg):
         self.mutex.acquire()
         self.handle_odometry(msg)
-        scale = 1
-        angle_scale = 0.5
-        if self.dx > 2 or self.dy > 2:
-            scale = 2
-            angle_scale=2
-        if self.dtheta > 0.25:
-            angle_scale = 4
-        self.pf.move_particles(self.dx, self.dy, self.dtheta, scale, angle_scale)
         self.mutex.release()
 
     def publish_particle_rviz(self):
@@ -292,10 +268,8 @@ class Montecarlo(object):
 
     def run(self):
         while not rospy.is_shutdown():
-            #self.publish_particle_rviz()
-            self.publish_beacons()
-            if len(self.real_points)>0:
-                self.publish_real_points(self.real_points)
+            self.publish_particle_rviz()
+
         time.sleep(1 / 30)
 
 MCL=Montecarlo()
