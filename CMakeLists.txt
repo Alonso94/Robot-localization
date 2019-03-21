@@ -1,18 +1,32 @@
-cmake_minimum_required(VERSION 2.8.3)
+cmake_minimum_required(VERSION 3.5)
 project(localization)
-find_package(catkin REQUIRED COMPONENTS
+
+find_package(catkin REQUIRED COMPONENTS  
+  roscpp
   rospy
-  message_generation
+  nav_msgs
+  sensor_msgs
+  std_msgs
+  tf
+  cmake_modules
+)
+find_package(Boost REQUIRED COMPONENTS system)
+find_package(Eigen3 REQUIRED)
+
+catkin_package(
+ INCLUDE_DIRS ${EIGEN3_INCLUDE_DIRS}
+ LIBRARIES ${PROJECT_NAME}
+ CATKIN_DEPENDS nav_msgs roscpp sensor_msgs std_msgs tf
+ DEPENDS #Eigen3
 )
 
-add_message_files(
-  FILES
-  Coordinates.msg
+include_directories(
+  SYSTEM
+  ${catkin_INCLUDE_DIRS}
+  ${Boost_INCLUDE_DIRS}
+  ${EIGEN3_INCLUDE_DIRS}
 )
-generate_messages(
-  DEPENDENCIES
-)
-catkin_package()
-include_directories(include ${catkin_INCLUDE_DIRS})
+set(CMAKE_CXX_STANDARD 14)
 
-
+add_executable(localization Clocalization.cpp)
+target_link_libraries(${PROJECT_NAME} ${catkin_LIBRARIES})
