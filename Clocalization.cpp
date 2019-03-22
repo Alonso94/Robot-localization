@@ -1,6 +1,4 @@
-//
-// Created by ali on 20.03.19.
-//
+
 #include <cstdlib>
 #include <iostream>
 #include <cmath>
@@ -24,12 +22,13 @@ using namespace std;
 #include <Eigen/Geometry>
 #include <unsupported/Eigen/MatrixFunctions>
 
-#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
-#include <tf2/LinearMath/Quaternion.h>
+#include <tf/tf.h>
 
-#include <ecl/threads.hpp>
+#include <geometry_msgs/Twist.h>
 
-using ecl::Mutex;
+#include <boost/thread/thread.hpp>
+#include <boost/thread/mutex.hpp>
+using boost::mutex;
 
 #define x_ first
 #define y_ second.first
@@ -58,15 +57,19 @@ point global2local(point global_point,point sc_point)
 
 class Particle_filter{
 public:
-    int num_particles=1000;
+    int num_particles=2500;
     double start_x=280,start_y=1250,start_th=3.14;
-    point res=make_pair(start_x,make_pair(start_y,start_th));
+    point res;
     vector<pair<double,double>> beacons{{3094,1000},{-94,50},{-94,1950}};
     double distance_noise=50,angle_noise=0.08;
     vector<point> particles;
+    vector<point> new_particles;
     vector<double> weights;
 
     Particle_filter(){
+        res.x_=start_x;
+        res.y_=start_y;
+        res.th_=start_th;
         init_particles(res,1,1);
     }
     void init_particles(point pose,double d_scale,double angle_scale){
@@ -75,10 +78,12 @@ public:
         normal_distribution<double> noise_x(pose.x_,d_scale*distance_noise);
         normal_distribution<double> noise_y(pose.y_,d_scale*distance_noise);
         normal_distribution<double> noise_th(pose.th_,angle_scale*angle_noise);
+        point p;
         for(int i=0;i<num_particles;++i){
-            particles[i].x_=noise_x(gen);
-            particles[i].y_=noise_y(gen);
-            particles[i].th_=noise_th(gen);
+            p.x_=noise_x(gen);
+            p.y_=noise_y(gen);
+            p.th_=noise_th(gen);
+            particles.push_back(p);
         }
     }
     void move_particles(double dx,double dy,double dth,double d_scale,double angle_scale){
@@ -89,16 +94,16 @@ public:
         normal_distribution<double> noise_th(0,angle_scale*angle_noise);
         for(int i=0;i<num_particles;++i){
             particles[i].x_+=dx+noise_x(gen);
-            if (particles[i].x_>19500) particles[i].x_=1950;
-            if (particles[i].x_<50) particles[i].x_=50;
+            if (particles[i].x_>2950) particles[i].x_=2950;
+            if (particles[i].x_<0) particles[i].x_=0;
             particles[i].y_+=dy+noise_y(gen);
-            if (particles[i].y_>2950) particles[i].y_=2950;
-            if (particles[i].y_<50) particles[i].y_=50;
+            if (particles[i].y_>1950) particles[i].y_=1950;
+            if (particles[i].y_<0) particles[i].y_=0;
             particles[i].th_+=dth+noise_th(gen);
             if (particles[i].th_>2*pi) particles[i].th_=fmod(particles[i].th_,2*pi);
         }
     }
-    int calc_weights(vector<pair<double,double> > real_points){
+    int calc_weights(vector<pair<double,double>> real_points){
         vector<double> probs;
         int max_seen_beacons=0;
         int seen_beacons;
@@ -122,13 +127,16 @@ public:
             }
             if (seen_beacons>=3) probs.push_back(pow(10,(seen_beacons-1))*I);
             else if (seen_beacons==2) probs.push_back(I);
-            else probs.push_back(0.005*I);
+            else probs.push_back(0.05*I);
             max_seen_beacons=max(max_seen_beacons,seen_beacons);
         }
         double sum=0;
-        for(auto&n :probs) sum+=n;
+        for(auto&n :probs) {
+            sum+=n;
+        }
+        weights.clear();
         for(int i=0;i<num_particles;++i){
-            weights[i]=probs[i]/sum;
+            weights.push_back(probs[i]/sum);
         }
         return max_seen_beacons;
     }
@@ -137,21 +145,23 @@ public:
         mt19937 gen(rd());
         uniform_real_distribution<double> r(0.0,0.9);
         vector<double> cum_sum,u;
-        cum_sum[0]=0;
+        cum_sum.push_back(0);
         for(int i=0;i<weights.size();++i){
-            cum_sum[i+1]=cum_sum[i]+weights[i];
-            u[i]=float(r(gen)+i)/num_particles;
+            cum_sum.push_back(cum_sum[i]+weights[i]);
+            u.push_back(float(r(gen)+i)/num_particles);
         }
-        vector<point> new_particles;
         int j=0;
+        new_particles.clear();
         for(auto&v:u){
-            while (j<cum_sum.size()-1 and v<cum_sum[j]){
+            while (j<cum_sum.size()-1 && v>cum_sum[j]){
                 j+=1;
             }
             new_particles.push_back(particles[j-1]);
         }
         particles.clear();
-        particles=new_particles;
+        for(int i=0;i<num_particles;++i){
+            particles.push_back(new_particles[i]);
+        }
     }
     point calc_pose(){
         double th0=particles[0].th_;
@@ -168,12 +178,13 @@ public:
         return res;
     }
 };
+
 class MonteCarlo{
 public:
     double dx=0.0,dy=0.0,dth=0.0;
     vector<pair<double,double>> real_points;
     Particle_filter pf;
-    Mutex mutex;
+    mutex mutex1;
 
     ros::Publisher poistion_pub;
     ros::Publisher laser_pub;
@@ -183,11 +194,13 @@ public:
     ros::Subscriber laser_sub;
     ros::Subscriber odom_sub;
 
-    nav_msgs::Odometry last_odom;
-    nav_msgs::Odometry curr_odom;
+    nav_msgs::OdometryConstPtr last_odom;
+    nav_msgs::OdometryConstPtr curr_odom;
     bool first;
 
-    MonteCarlo(int& argc,char **argv){
+
+
+    MonteCarlo(int argc, char** argv){
         ros::init(argc,argv,"localization");
         ros::NodeHandle n;
         ros::Rate r(30);
@@ -197,7 +210,7 @@ public:
         beacon_pub=n.advertise<geometry_msgs::PoseArray>("/beacons",1);
         particles_pub=n.advertise<geometry_msgs::PoseArray>("/particles",1);
 
-        laser_sub=n.subscribe<sensor_msgs::LaserScan>("/scan",1,&MonteCarlo::laser_callback,this);
+        laser_sub=n.subscribe<sensor_msgs::LaserScan>("/scan",1, &MonteCarlo::laser_callback,this);
         odom_sub=n.subscribe<nav_msgs::Odometry>("/real",1,&MonteCarlo::odom_callback,this);
         first=true;
     }
@@ -216,17 +229,17 @@ public:
         return real_points;
     }
 
-    void handle_observation(sensor_msgs::LaserScan laser_scan_msg){
+    void handle_observation(const sensor_msgs::LaserScanConstPtr &laser_scan_msg){
         vector<double> angles;
-        auto count=int(laser_scan_msg.scan_time/laser_scan_msg.time_increment);
-        double angle=laser_scan_msg.angle_min;
+        int count=1081;
+        double angle=laser_scan_msg->angle_min;
+        double add=laser_scan_msg->angle_increment;
         for (int i=0;i<count;++i){
             angles.push_back(angle);
-            angle+=laser_scan_msg.angle_increment;
+            angle+=add;
         }
-        vector<pair<double,double>> real_points;
-        real_points=get_laser_points(laser_scan_msg.ranges,laser_scan_msg.intensities,angles,2500);
-
+        real_points=get_laser_points(laser_scan_msg->ranges,laser_scan_msg->intensities,angles,2500);
+        publish_real_points();
         int seen_beacons;
         seen_beacons=pf.calc_weights(real_points);
         if(seen_beacons==0){
@@ -235,67 +248,162 @@ public:
             while(seen_beacons<3){
                 pf.init_particles(pf.res,8,8);
                 real_points.clear();
-                real_points=get_laser_points(laser_scan_msg.ranges,laser_scan_msg.intensities,angles,1200);
+                real_points=get_laser_points(laser_scan_msg->ranges,laser_scan_msg->intensities,angles,1200);
+                publish_real_points();
                 seen_beacons=pf.calc_weights(real_points);
                 pf.resample_and_update();
+                //publish_particles();
             }
             pf.beacons.pop_back();
             pf.beacons.pop_back();
             pf.calc_weights(real_points);
         }
         pf.resample_and_update();
+        //publish_particles();
         pf.res=pf.calc_pose();
-
         geometry_msgs::Pose2D pose;
         pose.x=pf.res.x_/1000;
         pose.y=pf.res.y_/1000;
         pose.theta=pf.res.th_;
         poistion_pub.publish(pose);
+        publish_beacons();
     }
 
-    void laser_callback(sensor_msgs::LaserScan &msg){
-        mutex.lock();
+    void laser_callback(const sensor_msgs::LaserScanConstPtr &msg){
+        mutex1.lock();
         handle_observation(msg);
-        mutex.unlock();
+        mutex1.unlock();
     }
 
-    void handle_odometry(nav_msgs::Odometry &odom){
-        first=false;
+    void handle_odometry(const nav_msgs::OdometryConstPtr &odom){
         last_odom=curr_odom;
         curr_odom=odom;
-        double p_curr[3],p_last[3],q_curr[4],q_last[4];
         if (!first) {
-            p_curr[0] = curr_odom.pose.pose.position.x;
-            p_curr[1] = curr_odom.pose.pose.position.y;
-            p_curr[2] = curr_odom.pose.pose.position.z;
+            tf::Vector3 p_curr(curr_odom->pose.pose.position.x,
+                                curr_odom->pose.pose.position.y,
+                                curr_odom->pose.pose.position.z);
 
-            p_last[0] = last_odom.pose.pose.position.x;
-            p_last[1] = last_odom.pose.pose.position.y;
-            p_last[2] = last_odom.pose.pose.position.z;
-
-            q_curr[0] = curr_odom.pose.pose.orientation.x;
-            q_curr[1] = curr_odom.pose.pose.orientation.y;
-            q_curr[2] = curr_odom.pose.pose.orientation.z;
-            q_curr[3] = curr_odom.pose.pose.orientation.w;
-
-            q_last[0] = last_odom.pose.pose.orientation.x;
-            q_last[1] = last_odom.pose.pose.orientation.y;
-            q_last[2] = last_odom.pose.pose.orientation.z;
-            q_last[3] = last_odom.pose.pose.orientation.w;
+            tf::Vector3 p_last(last_odom->pose.pose.position.x,
+                                last_odom->pose.pose.position.y,
+                                last_odom->pose.pose.position.z);
 
 
+            tf::Quaternion q_curr(curr_odom->pose.pose.orientation.x,
+                                    curr_odom->pose.pose.orientation.y,
+                                    curr_odom->pose.pose.orientation.z,
+                                    curr_odom->pose.pose.orientation.w);
 
+            tf::Quaternion q_last(last_odom->pose.pose.orientation.x,
+                                    last_odom->pose.pose.orientation.y,
+                                    last_odom->pose.pose.orientation.z,
+                                    last_odom->pose.pose.orientation.w);
+
+            tf::Matrix3x3 rot_last(q_last);
+            dx=rot_last.transpose().tdotx(p_curr-p_last)/1000;
+            dy=rot_last.transpose().tdoty(p_curr-p_last)/1000;
+            dth=2*q_curr.angle(q_last);
         }
+        first=false;
     }
+
+    void odom_callback(const nav_msgs::OdometryConstPtr &msg){
+        mutex1.lock();
+        handle_odometry(msg);
+        double scale,angle_scale;
+        scale=1;
+        angle_scale=0.5;
+        if (dx>0.5 || dy>0.5) {
+            scale=3;
+            angle_scale=2;
+        }
+        if (dth>0.05) angle_scale=3;
+        pf.move_particles(dx,dy,dth,scale,angle_scale);
+        mutex1.unlock();
+    }
+
+    void publish_particles(){
+        ros::Rate r(30);
+        geometry_msgs::PoseArray poses;
+        poses.header.stamp=ros::Time::now();
+        poses.header.frame_id="map";
+        for(auto&p:pf.particles){
+            geometry_msgs::Pose pose;
+            pose.position.x=p.x_/1000;
+            pose.position.y=p.y_/1000;
+            pose.position.z=0.0 ;
+            Eigen::Quaterniond quat(Eigen::AngleAxis<double>(p.th_, Eigen::Vector3d(0,0,1)));
+            pose.orientation.x=quat.x();
+            pose.orientation.y=quat.y();
+            pose.orientation.z=quat.z();
+            pose.orientation.w=quat.w();
+            poses.poses.insert(poses.poses.begin(),pose);
+        }
+        particles_pub.publish(poses);
+        r.sleep();
+    }
+
+    void publish_real_points(){
+        if(real_points.empty()) return;
+        ros::Rate r(30);
+        geometry_msgs::PoseArray poses;
+        poses.header.stamp=ros::Time::now();
+        poses.header.frame_id="map";
+        for(auto&p:real_points){
+            point real;
+            real.x_=p.first;
+            real.y_=p.second;
+            real.th_=0.0;
+            point r_real;
+            r_real=local2global(real,pf.res);
+            geometry_msgs::Pose pose;
+            pose.position.x=r_real.x_/1000;
+            pose.position.y=r_real.y_/1000;
+            pose.position.z=0.0 ;
+            Eigen::Quaterniond quat(Eigen::AngleAxis<double>(0.0, Eigen::Vector3d(0,0,1)));
+            pose.orientation.x=quat.x();
+            pose.orientation.y=quat.y();
+            pose.orientation.z=quat.z();
+            pose.orientation.w=quat.w();
+            poses.poses.insert(poses.poses.begin(),pose);
+        }
+        laser_pub.publish(poses);
+        r.sleep();
+    }
+
+    void publish_beacons(){
+        ros::Rate r(30);
+        geometry_msgs::PoseArray poses;
+        poses.header.stamp=ros::Time::now();
+        poses.header.frame_id="map";
+        geometry_msgs::Pose pose;
+        pose.position.x=pf.res.x_/1000;
+        pose.position.y=pf.res.y_/1000;
+        pose.position.z=0.0 ;
+        Eigen::Quaterniond quat(Eigen::AngleAxis<double>(pf.res.th_, Eigen::Vector3d(0,0,1)));
+        pose.orientation.x=quat.x();
+        pose.orientation.y=quat.y();
+        pose.orientation.z=quat.z();
+        pose.orientation.w=quat.w();
+        poses.poses.push_back(pose);
+        for(auto&p:pf.beacons){
+            pose.position.x=p.first/1000;
+            pose.position.y=p.second/1000;
+            pose.position.z=0.0 ;
+            quat=Eigen::AngleAxis<double>(0.0, Eigen::Vector3d(0,0,1));
+            pose.orientation.x=quat.x();
+            pose.orientation.y=quat.y();
+            pose.orientation.z=quat.z();
+            pose.orientation.w=quat.w();
+            poses.poses.insert(poses.poses.begin(),pose);
+        }
+        beacon_pub.publish(poses);
+        r.sleep();
+    }
+
 };
-int main()
+int main(int argc, char** argv)
 {
-    point r(make_pair(1,make_pair(1,3.14)));
-    point k(make_pair(1,make_pair(1,1.3)));
-    cout<<r.x_<<" "<<r.y_<<" "<<r.th_<<endl;
-    point res=local2global(r,k);
-    cout<<res.x_<<" "<<res.y_<<" "<<res.th_<<endl;
-    res=global2local(res,k);
-    cout<<res.x_<<" "<<res.y_<<" "<<res.th_<<endl;
+    MonteCarlo MCL(argc,argv);
+    ros::spin();
     return 0;
 }

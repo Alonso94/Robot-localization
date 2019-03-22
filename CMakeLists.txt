@@ -30,3 +30,4 @@ set(CMAKE_CXX_STANDARD 14)
 
 add_executable(localization Clocalization.cpp)
 target_link_libraries(${PROJECT_NAME} ${catkin_LIBRARIES})
+add_compile_options(-std=c++0x)
