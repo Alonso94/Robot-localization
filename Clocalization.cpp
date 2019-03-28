@@ -16,6 +16,7 @@ using namespace std;
 #include <sensor_msgs/LaserScan.h>
 #include <geometry_msgs/Pose2D.h>
 #include <geometry_msgs/PoseArray.h>
+#include <geometry_msgs/PoseStamped.h>
 
 // Eigen headers
 #include <Eigen/Dense>
@@ -70,7 +71,7 @@ public:
         res.x_=start_x;
         res.y_=start_y;
         res.th_=start_th;
-        init_particles(res,1,1);
+        init_particles(res,2,2);
     }
     void init_particles(point pose,double d_scale,double angle_scale){
         random_device rd;
@@ -205,7 +206,7 @@ public:
         ros::NodeHandle n;
         ros::Rate r(30);
 
-        poistion_pub=n.advertise<geometry_msgs::Pose2D>("/robot_position",1);
+        poistion_pub=n.advertise<geometry_msgs::PoseStamped>("/robot_position",1);
         laser_pub=n.advertise<geometry_msgs::PoseArray>("/laser",1);
         beacon_pub=n.advertise<geometry_msgs::PoseArray>("/beacons",1);
         particles_pub=n.advertise<geometry_msgs::PoseArray>("/particles",1);
@@ -229,7 +230,7 @@ public:
         return real_points;
     }
 
-    void handle_observation(const sensor_msgs::LaserScanConstPtr &laser_scan_msg){
+    void handle_observation(const sensor_msgs::LaserScanConstPtr &laser_scan_msg,ros::Time time){
         vector<double> angles;
         int count=1081;
         double angle=laser_scan_msg->angle_min;
@@ -239,8 +240,9 @@ public:
             angle+=add;
         }
         real_points=get_laser_points(laser_scan_msg->ranges,laser_scan_msg->intensities,angles,2500);
-        publish_real_points();
+        //publish_real_points();
         int seen_beacons;
+        int scale,angle_scale;
         seen_beacons=pf.calc_weights(real_points);
         if(seen_beacons==0){
             pf.beacons.emplace_back(1500,200);
@@ -249,7 +251,7 @@ public:
                 pf.init_particles(pf.res,8,8);
                 real_points.clear();
                 real_points=get_laser_points(laser_scan_msg->ranges,laser_scan_msg->intensities,angles,1200);
-                publish_real_points();
+                //publish_real_points();
                 seen_beacons=pf.calc_weights(real_points);
                 pf.resample_and_update();
                 //publish_particles();
@@ -261,17 +263,26 @@ public:
         pf.resample_and_update();
         //publish_particles();
         pf.res=pf.calc_pose();
-        geometry_msgs::Pose2D pose;
-        pose.x=pf.res.x_/1000;
-        pose.y=pf.res.y_/1000;
-        pose.theta=pf.res.th_;
+        geometry_msgs::PoseStamped pose;
+        pose.header.stamp=time;
+        pose.header.frame_id="map";
+        pose.pose.position.x=pf.res.x_/1000;
+        pose.pose.position.y=pf.res.y_/1000;
+        pose.pose.position.z=0.0 ;
+        Eigen::Quaterniond quat(Eigen::AngleAxis<double>(pf.res.th_, Eigen::Vector3d(0,0,1)));
+        pose.pose.orientation.x=quat.x();
+        pose.pose.orientation.y=quat.y();
+        pose.pose.orientation.z=quat.z();
+        pose.pose.orientation.w=quat.w();
         poistion_pub.publish(pose);
-        publish_beacons();
+        //publish_beacons();
     }
 
     void laser_callback(const sensor_msgs::LaserScanConstPtr &msg){
         mutex1.lock();
-        handle_observation(msg);
+        ros::Time time;
+        time=ros::Time::now();
+        handle_observation(msg,time);
         mutex1.unlock();
     }
 
