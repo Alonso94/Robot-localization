@@ -24,6 +24,7 @@ using namespace std;
 #include <unsupported/Eigen/MatrixFunctions>
 
 #include <tf/tf.h>
+#include <tf/transform_datatypes.h>
 
 #include <geometry_msgs/Twist.h>
 
@@ -58,10 +59,12 @@ point global2local(point global_point,point sc_point)
 
 class Particle_filter{
 public:
-    int num_particles=2500;
-    double start_x=280,start_y=1250,start_th=3.14;
+    int num_particles=1000;
+    //double start_x=300,start_y=1300,start_th=3.14;
+    double start_x=2700,start_y=1300,start_th=0.0;
     point res;
-    vector<pair<double,double>> beacons{{3094,1000},{-94,50},{-94,1950}};
+    //vector<pair<double,double>> beacons{{3094,1000},{-94,50},{-94,1950}};
+    vector<pair<double,double>> beacons{{-94,1000},{3094,50},{3094,1950}};
     double distance_noise=50,angle_noise=0.08;
     vector<point> particles;
     vector<point> new_particles;
@@ -88,6 +91,10 @@ public:
         }
     }
     void move_particles(double dx,double dy,double dth,double d_scale,double angle_scale){
+        res.x_+=dx;
+        res.y_+=dy;
+        res.th_+=dth;
+        res.th_=fmod(res.th_,2*pi);
         random_device rd;
         mt19937 gen(rd());
         normal_distribution<double> noise_x(0,d_scale*distance_noise);
@@ -187,7 +194,7 @@ public:
     Particle_filter pf;
     mutex mutex1;
 
-    ros::Publisher poistion_pub;
+    ros::Publisher position_pub;
     ros::Publisher laser_pub;
     ros::Publisher beacon_pub;
     ros::Publisher particles_pub;
@@ -206,7 +213,8 @@ public:
         ros::NodeHandle n;
         ros::Rate r(30);
 
-        poistion_pub=n.advertise<geometry_msgs::PoseStamped>("/robot_position",1);
+        //poistion_pub=n.advertise<geometry_msgs::PoseStamped>("/robot_position",1);
+        position_pub=n.advertise<nav_msgs::Odometry>("/real_corr",1);
         laser_pub=n.advertise<geometry_msgs::PoseArray>("/laser",1);
         beacon_pub=n.advertise<geometry_msgs::PoseArray>("/beacons",1);
         particles_pub=n.advertise<geometry_msgs::PoseArray>("/particles",1);
@@ -221,7 +229,7 @@ public:
         vector<pair<double ,double >> real_points;
         double x,y;
         for(int i=0;i<ranges.size();++i){
-            if(ranges[i]<max_range && intens[i]>min_inten){
+            if(ranges[i]>0.05 && ranges[i]<max_range && intens[i]>min_inten){
                 x=ranges[i]*1000*cos(angles[i]);
                 y=ranges[i]*1000*sin(angles[i]);
                 real_points.emplace_back(x,-y);
@@ -240,9 +248,13 @@ public:
             angle+=add;
         }
         real_points=get_laser_points(laser_scan_msg->ranges,laser_scan_msg->intensities,angles,2500);
-        //publish_real_points();
+        if(real_points.size()==0){
+            publish_pose(time);
+            publish_beacons();
+            return;
+        }
+        publish_real_points();
         int seen_beacons;
-        int scale,angle_scale;
         seen_beacons=pf.calc_weights(real_points);
         if(seen_beacons==0){
             pf.beacons.emplace_back(1500,200);
@@ -251,31 +263,39 @@ public:
                 pf.init_particles(pf.res,8,8);
                 real_points.clear();
                 real_points=get_laser_points(laser_scan_msg->ranges,laser_scan_msg->intensities,angles,1200);
-                //publish_real_points();
+                publish_real_points();
                 seen_beacons=pf.calc_weights(real_points);
                 pf.resample_and_update();
-                //publish_particles();
+                publish_particles();
+                publish_pose(time);
+                publish_beacons();
             }
             pf.beacons.pop_back();
             pf.beacons.pop_back();
             pf.calc_weights(real_points);
+            return;
         }
         pf.resample_and_update();
-        //publish_particles();
+        publish_particles();
         pf.res=pf.calc_pose();
-        geometry_msgs::PoseStamped pose;
+        publish_pose(time);
+        publish_beacons();
+        //cout<<"pose: "<<pf.res.x_/1000<<" "<<pf.res.y_/1000<<" "<<pf.res.th_<<endl;
+    }
+
+    void publish_pose(ros::Time time){
+        nav_msgs::Odometry pose;
         pose.header.stamp=time;
         pose.header.frame_id="map";
-        pose.pose.position.x=pf.res.x_/1000;
-        pose.pose.position.y=pf.res.y_/1000;
-        pose.pose.position.z=0.0 ;
+        pose.pose.pose.position.x=pf.res.x_/1000;
+        pose.pose.pose.position.y=pf.res.y_/1000;
+        pose.pose.pose.position.z=0.0 ;
         Eigen::Quaterniond quat(Eigen::AngleAxis<double>(pf.res.th_, Eigen::Vector3d(0,0,1)));
-        pose.pose.orientation.x=quat.x();
-        pose.pose.orientation.y=quat.y();
-        pose.pose.orientation.z=quat.z();
-        pose.pose.orientation.w=quat.w();
-        poistion_pub.publish(pose);
-        //publish_beacons();
+        pose.pose.pose.orientation.x=quat.x();
+        pose.pose.pose.orientation.y=quat.y();
+        pose.pose.pose.orientation.z=quat.z();
+        pose.pose.pose.orientation.w=quat.w();
+        position_pub.publish(pose);
     }
 
     void laser_callback(const sensor_msgs::LaserScanConstPtr &msg){
@@ -291,28 +311,31 @@ public:
         curr_odom=odom;
         if (!first) {
             tf::Vector3 p_curr(curr_odom->pose.pose.position.x,
-                                curr_odom->pose.pose.position.y,
-                                curr_odom->pose.pose.position.z);
+                               curr_odom->pose.pose.position.y,
+                               curr_odom->pose.pose.position.z);
 
             tf::Vector3 p_last(last_odom->pose.pose.position.x,
-                                last_odom->pose.pose.position.y,
-                                last_odom->pose.pose.position.z);
+                               last_odom->pose.pose.position.y,
+                               last_odom->pose.pose.position.z);
 
 
             tf::Quaternion q_curr(curr_odom->pose.pose.orientation.x,
-                                    curr_odom->pose.pose.orientation.y,
-                                    curr_odom->pose.pose.orientation.z,
-                                    curr_odom->pose.pose.orientation.w);
+                                  curr_odom->pose.pose.orientation.y,
+                                  curr_odom->pose.pose.orientation.z,
+                                  curr_odom->pose.pose.orientation.w);
 
             tf::Quaternion q_last(last_odom->pose.pose.orientation.x,
-                                    last_odom->pose.pose.orientation.y,
-                                    last_odom->pose.pose.orientation.z,
-                                    last_odom->pose.pose.orientation.w);
+                                  last_odom->pose.pose.orientation.y,
+                                  last_odom->pose.pose.orientation.z,
+                                  last_odom->pose.pose.orientation.w);
 
             tf::Matrix3x3 rot_last(q_last);
-            dx=rot_last.transpose().tdotx(p_curr-p_last)/1000;
-            dy=rot_last.transpose().tdoty(p_curr-p_last)/1000;
-            dth=2*q_curr.angle(q_last);
+            dx=rot_last.transpose().tdotx(p_last-p_curr)*1000;
+            dy=rot_last.transpose().tdoty(p_last-p_curr)*1000;
+            double th1,th2;
+            th1=tf::getYaw(q_curr);
+            th2=tf::getYaw(q_last);
+            dth=th2-th1;
         }
         first=false;
     }
@@ -323,11 +346,12 @@ public:
         double scale,angle_scale;
         scale=1;
         angle_scale=0.5;
-        if (dx>0.5 || dy>0.5) {
+        if (abs(dx)>0.5 || abs(dy)>0.5) {
             scale=3;
             angle_scale=2;
         }
         if (dth>0.05) angle_scale=3;
+        //cout<<"odom: "<<dx<<" "<<dy<<" "<<dth<<endl;
         pf.move_particles(dx,dy,dth,scale,angle_scale);
         mutex1.unlock();
     }
