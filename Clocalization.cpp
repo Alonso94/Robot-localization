@@ -60,12 +60,12 @@ point global2local(point global_point,point sc_point)
 class Particle_filter{
 public:
     int num_particles=1000;
-    //double start_x=300,start_y=1300,start_th=3.14;
-    double start_x=2700,start_y=1300,start_th=0.0;
+    double start_x=300,start_y=1300,start_th=3.14;
+    //double start_x=2700,start_y=1300,start_th=0.0;
     point res;
-    //vector<pair<double,double>> beacons{{3094,1000},{-94,50},{-94,1950}};
-    vector<pair<double,double>> beacons{{-94,1000},{3094,50},{3094,1950}};
-    double distance_noise=50,angle_noise=0.08;
+    vector<pair<double,double>> beacons{{3094,1000},{-94,50},{-94,1950}};
+    //vector<pair<double,double>> beacons{{-94,1000},{3094,50},{3094,1950}};
+    double distance_noise=50,angle_noise=0.05;
     vector<point> particles;
     vector<point> new_particles;
     vector<double> weights;
@@ -190,6 +190,7 @@ public:
 class MonteCarlo{
 public:
     double dx=0.0,dy=0.0,dth=0.0;
+    double vx=0.0,vy=0.0;
     vector<pair<double,double>> real_points;
     Particle_filter pf;
     mutex mutex1;
@@ -212,7 +213,7 @@ public:
         ros::init(argc,argv,"localization");
         ros::NodeHandle n;
         ros::Rate r(30);
-
+        cout<<"contruct"<<endl;
         //poistion_pub=n.advertise<geometry_msgs::PoseStamped>("/robot_position",1);
         position_pub=n.advertise<nav_msgs::Odometry>("/real_corr",1);
         laser_pub=n.advertise<geometry_msgs::PoseArray>("/laser",1);
@@ -239,6 +240,7 @@ public:
     }
 
     void handle_observation(const sensor_msgs::LaserScanConstPtr &laser_scan_msg,ros::Time time){
+        //cout<<"recieved"<<endl;
         vector<double> angles;
         int count=1081;
         double angle=laser_scan_msg->angle_min;
@@ -247,7 +249,7 @@ public:
             angles.push_back(angle);
             angle+=add;
         }
-        real_points=get_laser_points(laser_scan_msg->ranges,laser_scan_msg->intensities,angles,2500);
+        real_points=get_laser_points(laser_scan_msg->ranges,laser_scan_msg->intensities,angles,3500);
         if(real_points.size()==0){
             publish_pose(time);
             publish_beacons();
@@ -266,7 +268,7 @@ public:
                 publish_real_points();
                 seen_beacons=pf.calc_weights(real_points);
                 pf.resample_and_update();
-                publish_particles();
+                //publish_particles();
                 publish_pose(time);
                 publish_beacons();
             }
@@ -276,7 +278,7 @@ public:
             return;
         }
         pf.resample_and_update();
-        publish_particles();
+        //publish_particles();
         pf.res=pf.calc_pose();
         publish_pose(time);
         publish_beacons();
@@ -288,9 +290,9 @@ public:
         pose.header.stamp=time;
         pose.header.frame_id="map";
         pose.pose.pose.position.x=pf.res.x_/1000;
-        pose.pose.pose.position.y=pf.res.y_/1000;
+        pose.pose.pose.position.y=pf.res.y_/1000-0.02;
         pose.pose.pose.position.z=0.0 ;
-        Eigen::Quaterniond quat(Eigen::AngleAxis<double>(pf.res.th_, Eigen::Vector3d(0,0,1)));
+        Eigen::Quaterniond quat(Eigen::AngleAxis<double>(fmod((pi+pf.res.th_),2*pi), Eigen::Vector3d(0,0,1)));
         pose.pose.pose.orientation.x=quat.x();
         pose.pose.pose.orientation.y=quat.y();
         pose.pose.pose.orientation.z=quat.z();
@@ -329,30 +331,42 @@ public:
                                   last_odom->pose.pose.orientation.z,
                                   last_odom->pose.pose.orientation.w);
 
-            tf::Matrix3x3 rot_last(q_last);
-            dx=rot_last.transpose().tdotx(p_last-p_curr)*1000;
-            dy=rot_last.transpose().tdoty(p_last-p_curr)*1000;
+            //tf::Matrix3x3 rot_last(q_last);
+            //dx=rot_last.transpose().tdotx(p_last-p_curr)*1000;
+            //dy=rot_last.transpose().tdoty(p_last-p_curr)*1000;
+            double x1=curr_odom->pose.pose.position.x;
+            double x2=last_odom->pose.pose.position.x;
+            dx=(x1-x2)*1000;
+            double y1=curr_odom->pose.pose.position.y;
+            double y2=last_odom->pose.pose.position.y;
+            dy=(y1-y2)*1000;
             double th1,th2;
             th1=tf::getYaw(q_curr);
             th2=tf::getYaw(q_last);
-            dth=th2-th1;
+            dth=th1-th2;
         }
         first=false;
     }
 
     void odom_callback(const nav_msgs::OdometryConstPtr &msg){
         mutex1.lock();
+        ros::Time time;
+        time=ros::Time::now();
         handle_odometry(msg);
+        //vx=msg->twist.twist.linear.x;
+        //vy=msg->twist.twist.linear.y;
         double scale,angle_scale;
         scale=1;
-        angle_scale=0.5;
+        angle_scale=1;
         if (abs(dx)>0.5 || abs(dy)>0.5) {
-            scale=3;
+            scale=2;
             angle_scale=2;
         }
-        if (dth>0.05) angle_scale=3;
+        if (dth>0.05) angle_scale=4;
         //cout<<"odom: "<<dx<<" "<<dy<<" "<<dth<<endl;
         pf.move_particles(dx,dy,dth,scale,angle_scale);
+        //publish_pose(time);
+        // publish_beacons();
         mutex1.unlock();
     }
 
