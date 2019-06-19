@@ -1,4 +1,3 @@
-
 #include <cstdlib>
 #include <iostream>
 #include <cmath>
@@ -60,11 +59,29 @@ point global2local(point global_point,point sc_point)
 class Particle_filter{
 public:
     int num_particles=1000;
+
+    /////////////////////////
+    // start position
+    //////////////////////////
+    // purple - green
     double start_x=300,start_y=1300,start_th=3.14;
+    // purple - red
+    // double start_x=300,start_y=1400,start_th=3.14;
+    // yellow - green
     //double start_x=2700,start_y=1300,start_th=0.0;
+    // yellow - red
+    //double start_x=2700,start_y=1400,start_th=0.0;
+
     point res;
+
+    /////////////////////////////////////////
+    // zone
+    //////////////////////////////////////////
+    // purple
     vector<pair<double,double>> beacons{{3094,1000},{-94,50},{-94,1950}};
+    // yellow
     //vector<pair<double,double>> beacons{{-94,1000},{3094,50},{3094,1950}};
+
     double distance_noise=50,angle_noise=0.05;
     vector<point> particles;
     vector<point> new_particles;
@@ -77,6 +94,7 @@ public:
         init_particles(res,2,2);
     }
     void init_particles(point pose,double d_scale,double angle_scale){
+        // initilize particles randomly (normal distribution)
         random_device rd;
         mt19937 gen(rd());
         normal_distribution<double> noise_x(pose.x_,d_scale*distance_noise);
@@ -91,6 +109,7 @@ public:
         }
     }
     void move_particles(double dx,double dy,double dth,double d_scale,double angle_scale){
+        // move particles by odometry
         res.x_+=dx;
         res.y_+=dy;
         res.th_+=dth;
@@ -112,11 +131,14 @@ public:
         }
     }
     int calc_weights(vector<pair<double,double>> real_points){
+        // calculate weight for each particle depending on the LIDAR data
+        // real points: data from lidar, as points in the general frame
         vector<double> probs;
         int max_seen_beacons=0;
         int seen_beacons;
         double I,xb,yb,dx,dy,distance;
         point beacon_center,center;
+        // for each particle
         for(int i=0;i<num_particles;i++){
             seen_beacons=0;
             I=0;
@@ -129,6 +151,7 @@ public:
                     dx=point.first-center.x_;
                     dy=point.second-center.y_;
                     distance=abs(sqrt(dx*dx+dy*dy)-50);
+                    // function 1/(1+d^1.2)
                     I+=(1/(1+pow(distance,1.2)));
                 }
                 if(I>0.04) seen_beacons+=1;
@@ -143,12 +166,15 @@ public:
             sum+=n;
         }
         weights.clear();
+        // normalize weights
         for(int i=0;i<num_particles;++i){
             weights.push_back(probs[i]/sum);
         }
         return max_seen_beacons;
     }
+
     void resample_and_update(){
+        // resample particle based on the weights
         random_device rd;
         mt19937 gen(rd());
         uniform_real_distribution<double> r(0.0,0.9);
@@ -171,7 +197,9 @@ public:
             particles.push_back(new_particles[i]);
         }
     }
+
     point calc_pose(){
+        // mean of the particles position along x,y ,theta
         double th0=particles[0].th_;
         double sum_x=0,sum_y=0,sum_th=0;
         for(auto&p:particles){
@@ -215,7 +243,10 @@ public:
         ros::Rate r(30);
         cout<<"contruct"<<endl;
         //poistion_pub=n.advertise<geometry_msgs::PoseStamped>("/robot_position",1);
+        // output
         position_pub=n.advertise<nav_msgs::Odometry>("/real_corr",1);
+
+        // visualization
         laser_pub=n.advertise<geometry_msgs::PoseArray>("/laser",1);
         beacon_pub=n.advertise<geometry_msgs::PoseArray>("/beacons",1);
         particles_pub=n.advertise<geometry_msgs::PoseArray>("/particles",1);
@@ -249,6 +280,7 @@ public:
             angles.push_back(angle);
             angle+=add;
         }
+        // get real points with 3500 as a threshold over intensity
         real_points=get_laser_points(laser_scan_msg->ranges,laser_scan_msg->intensities,angles,3500);
         if(real_points.size()==0){
             publish_pose(time);
@@ -259,6 +291,7 @@ public:
         int seen_beacons;
         seen_beacons=pf.calc_weights(real_points);
         if(seen_beacons==0){
+            // using central tower
             pf.beacons.emplace_back(1500,200);
             pf.beacons.emplace_back(1500,2050);
             while(seen_beacons<3){
@@ -454,5 +487,4 @@ int main(int argc, char** argv)
 {
     MonteCarlo MCL(argc,argv);
     ros::spin();
-    return 0;
-}
+return 0;
